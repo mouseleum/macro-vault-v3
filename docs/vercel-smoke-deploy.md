@@ -51,6 +51,10 @@ In Vercel:
 5. Build Command: `npm run build`.
 6. Install Command: `npm install`.
 
+For this smoke deploy, keep production reachable from the public internet by
+turning Vercel Deployment Protection off. The app API should still reject
+unauthenticated requests with Macro Vault's own `VAULT_API_KEY` check.
+
 ## Required Environment Variables
 
 Add these to Vercel Project Settings -> Environment Variables:
@@ -131,6 +135,8 @@ curl -H "Authorization: Bearer $VAULT_API_KEY" \
 The smoke deploy is good enough when:
 
 - Vercel build passes.
+- The Vercel URL opens without Vercel's own authentication page.
+- Unauthenticated API calls return the app's `401`, not a Vercel protection page.
 - `GET /api/vault/contract` works remotely.
 - `GET /api/vault/series?limit=5` works remotely.
 - Dashboard totals load.
@@ -143,3 +149,7 @@ After this, downstream apps can attach using:
 MACRO_VAULT_URL=https://YOUR-VERCEL-URL
 MACRO_VAULT_API_KEY=<same vault key, server-side only>
 ```
+
+Later hardening target: split dashboard/user access from the vault API contract.
+Keep server-to-server vault access stable with project keys, then protect the
+dashboard/workbench separately with Clerk.

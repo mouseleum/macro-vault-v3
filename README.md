@@ -30,6 +30,9 @@ Good downstream-app responsibilities:
 
 ## Later Roadmap
 
+- Split the deployed surface into a clean option 4 architecture: a stable
+  server-to-server vault API protected by project keys, plus a dashboard/workbench
+  protected separately with Clerk or another user auth layer.
 - Add Alpha Vantage as an optional market-proxy connector for daily reaction assets such as SPY, QQQ, IWM, TLT, HYG, LQD, GLD, UUP, oil, copper, and natural gas. Keep this after the core FMP calendar, FRED, regime, intelligence, Vercel, and Clerk work because the free tier is useful but limited.
 
 ## Data Source Roadmap
@@ -179,6 +182,10 @@ Supabase browser writes.
 
 Deploy when local checks pass and the core vault API is stable enough to test in
 production. This first deploy is only a smoke test, not the final release.
+
+For the smoke deploy, Vercel Deployment Protection should be off for production
+so downstream projects can reach the app. Macro Vault API routes remain protected
+by `Authorization: Bearer <VAULT_API_KEY>`.
 
 1. Push the project to a GitHub repository.
 2. Import the repository in Vercel as a Next.js project.
