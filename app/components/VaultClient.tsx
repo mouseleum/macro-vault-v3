@@ -58,6 +58,7 @@ type SyncAction =
   | "eia"
   | "gdelt"
   | "reliefweb"
+  | "faa"
   | "usgs"
   | "treasury"
   | "cftc"
@@ -194,6 +195,14 @@ const syncModules: Array<{
     actionLabel: "Sync Relief Signals",
     tone: "red",
     action: "reliefweb"
+  },
+  {
+    tag: "FAA NAS",
+    title: "Airspace & Airport Stress",
+    description: "Stores ground stops, delay programs, airport closures, and enroute flow constraints.",
+    actionLabel: "Sync FAA NAS",
+    tone: "blue",
+    action: "faa"
   },
   {
     tag: "USGS",
@@ -863,6 +872,20 @@ export function VaultClient() {
       totalEvents: number;
       storedEvents: number;
       failed?: Array<{ theme: string; error: string }>;
+    }>
+  >({
+    loading: false,
+    error: null,
+    data: null
+  });
+  const [faaSync, setFaaSync] = useState<
+    ApiState<{
+      ok: boolean;
+      fetchedAirportRows: number;
+      fetchedEnrouteRows: number;
+      totalEvents: number;
+      storedEvents: number;
+      duplicatesSkipped: number;
     }>
   >({
     loading: false,
@@ -1672,6 +1695,37 @@ export function VaultClient() {
     }
   }
 
+  async function syncFaa(options: SyncOptions = {}) {
+    const shouldRefresh = options.refresh ?? true;
+    setFaaSync({ loading: true, error: null, data: null });
+    try {
+      const data = await readJson<{
+        ok: boolean;
+        fetchedAirportRows: number;
+        fetchedEnrouteRows: number;
+        totalEvents: number;
+        storedEvents: number;
+        duplicatesSkipped: number;
+      }>(
+        await fetch("/api/sync/faa", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({})
+        })
+      );
+      setFaaSync({ loading: false, error: null, data });
+      setLastAction(`FAA NAS stored ${data.storedEvents} airspace stress events`);
+      if (shouldRefresh) {
+        await loadMacroEvents();
+        await loadSyncRuns();
+      }
+      return true;
+    } catch (error) {
+      setFaaSync({ loading: false, error: error instanceof Error ? error.message : "FAA NAS sync failed", data: null });
+      return false;
+    }
+  }
+
   async function syncUsgs(options: SyncOptions = {}) {
     const shouldRefresh = options.refresh ?? true;
     setUsgsSync({ loading: true, error: null, data: null });
@@ -1949,6 +2003,11 @@ export function VaultClient() {
       return;
     }
 
+    if (action === "faa") {
+      await syncFaa();
+      return;
+    }
+
     if (action === "usgs") {
       await syncUsgs();
       return;
@@ -2102,6 +2161,7 @@ export function VaultClient() {
     eiaSync.error ||
     gdeltSync.error ||
     reliefWebSync.error ||
+    faaSync.error ||
     usgsSync.error ||
     treasurySync.error ||
     eurostatSync.error ||
@@ -2125,6 +2185,7 @@ export function VaultClient() {
     eiaSync.loading ||
     gdeltSync.loading ||
     reliefWebSync.loading ||
+    faaSync.loading ||
     usgsSync.loading ||
     treasurySync.loading ||
     eurostatSync.loading ||
@@ -2188,7 +2249,8 @@ export function VaultClient() {
     "fmp",
     "gemini",
     "treasury",
-    "usgs"
+    "usgs",
+    "faaNas"
   ];
   const coreConnectorsReady = health.data
     ? coreConnectorKeys.every((key) => {
@@ -2447,6 +2509,7 @@ export function VaultClient() {
                     (module.action === "eia" && eiaSync.loading) ||
                     (module.action === "gdelt" && gdeltSync.loading) ||
                     (module.action === "reliefweb" && reliefWebSync.loading) ||
+                    (module.action === "faa" && faaSync.loading) ||
                     (module.action === "usgs" && usgsSync.loading) ||
                     (module.action === "treasury" && treasurySync.loading) ||
                     (module.action === "eurostat" && eurostatSync.loading) ||
@@ -2550,6 +2613,21 @@ export function VaultClient() {
                   {!!reliefWebSync.data.failed?.length && (
                     <p className="error-text">{reliefWebSync.data.failed.length} ReliefWeb themes failed. Check sync logs for details.</p>
                   )}
+                </section>
+              )}
+              {faaSync.data && (
+                <section className="console-panel">
+                  <span className="micro-label">FAA NAS</span>
+                  <h2>Airspace stress sync complete</h2>
+                  <p className="muted-line">
+                    {faaSync.data.storedEvents.toLocaleString()} new FAA NAS events stored from{" "}
+                    {faaSync.data.totalEvents.toLocaleString()} candidates.
+                  </p>
+                  <p className="muted-line">
+                    {faaSync.data.fetchedAirportRows.toLocaleString()} airport rows and{" "}
+                    {faaSync.data.fetchedEnrouteRows.toLocaleString()} enroute rows checked;{" "}
+                    {faaSync.data.duplicatesSkipped.toLocaleString()} duplicates skipped.
+                  </p>
                 </section>
               )}
               {usgsSync.data && (

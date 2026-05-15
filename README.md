@@ -45,6 +45,7 @@ Active connector priorities:
 - CFTC Commitments of Traders: leveraged-fund, asset-manager, managed-money, dealer, and open-interest positioning.
 - ReliefWeb humanitarian stress reports: conflict, displacement, food stress, and disaster metadata.
 - USGS earthquake telemetry: significant seismic events with magnitude, depth, alert, and coordinates.
+- FAA NAS Status: U.S. airport closures, ground stops, delay programs, deicing, and enroute flow constraints.
 - U.S. Treasury FiscalData: TGA balances, Treasury cash flows, and public debt outstanding.
 
 Next connector candidates:
@@ -105,6 +106,7 @@ POST /api/sync/eurostat
 POST /api/sync/gdelt
 POST /api/sync/reliefweb
 POST /api/sync/usgs
+POST /api/sync/faa
 POST /api/sync/treasury
 POST /api/sync/cftc
 POST /api/sync/fx

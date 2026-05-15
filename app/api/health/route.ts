@@ -84,7 +84,7 @@ async function probeConnectors() {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
-  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, usgs, treasury, cftc, fred, eia, fmp, gemini] = await Promise.all([
+  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, usgs, faaNas, treasury, cftc, fred, eia, fmp, gemini] = await Promise.all([
     probeSupabase(),
     probeFetch("https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.CD?format=json&per_page=1"),
     probeFetch("https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/namq_10_gdp?format=JSON&lang=EN&freq=Q&s_adj=SCA&unit=CLV_PCH_PRE&na_item=B1GQ&geo=EU27_2020&sinceTimePeriod=2026-Q1"),
@@ -99,6 +99,7 @@ async function probeConnectors() {
         })
       : Promise.resolve(missingConnector("RELIEFWEB_APP_NAME is not configured.")),
     probeFetch("https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&minmagnitude=5"),
+    probeFetch("https://nasstatus.faa.gov/api/airport-events"),
     probeFetch("https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?page[size]=1"),
     probeFetch("https://www.cftc.gov/dea/newcot/FinFutWk.txt"),
     fredKey
@@ -128,6 +129,7 @@ async function probeConnectors() {
     gdelt,
     reliefweb,
     usgs,
+    faaNas,
     treasury,
     cftc,
     fred,
