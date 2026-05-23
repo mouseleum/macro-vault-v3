@@ -58,6 +58,7 @@ type SyncAction =
   | "eia"
   | "gdelt"
   | "reliefweb"
+  | "acled"
   | "faa"
   | "usgs"
   | "treasury"
@@ -195,6 +196,14 @@ const syncModules: Array<{
     actionLabel: "Sync Relief Signals",
     tone: "red",
     action: "reliefweb"
+  },
+  {
+    tag: "ACLED",
+    title: "Conflict Event Ground Truth",
+    description: "Stores battles, protests, riots, civilian violence, and explosion events with actors and locations.",
+    actionLabel: "Sync Conflict Events",
+    tone: "red",
+    action: "acled"
   },
   {
     tag: "FAA NAS",
@@ -872,6 +881,20 @@ export function VaultClient() {
       totalEvents: number;
       storedEvents: number;
       failed?: Array<{ theme: string; error: string }>;
+    }>
+  >({
+    loading: false,
+    error: null,
+    data: null
+  });
+  const [acledSync, setAcledSync] = useState<
+    ApiState<{
+      ok: boolean;
+      fetchedRows: number;
+      totalAvailable: number | null;
+      totalEvents: number;
+      storedEvents: number;
+      duplicatesSkipped: number;
     }>
   >({
     loading: false,
@@ -1695,6 +1718,37 @@ export function VaultClient() {
     }
   }
 
+  async function syncAcled(options: SyncOptions = {}) {
+    const shouldRefresh = options.refresh ?? true;
+    setAcledSync({ loading: true, error: null, data: null });
+    try {
+      const data = await readJson<{
+        ok: boolean;
+        fetchedRows: number;
+        totalAvailable: number | null;
+        totalEvents: number;
+        storedEvents: number;
+        duplicatesSkipped: number;
+      }>(
+        await fetch("/api/sync/acled", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({})
+        })
+      );
+      setAcledSync({ loading: false, error: null, data });
+      setLastAction(`ACLED stored ${data.storedEvents} conflict events`);
+      if (shouldRefresh) {
+        await loadMacroEvents();
+        await loadSyncRuns();
+      }
+      return true;
+    } catch (error) {
+      setAcledSync({ loading: false, error: error instanceof Error ? error.message : "ACLED sync failed", data: null });
+      return false;
+    }
+  }
+
   async function syncFaa(options: SyncOptions = {}) {
     const shouldRefresh = options.refresh ?? true;
     setFaaSync({ loading: true, error: null, data: null });
@@ -2003,6 +2057,11 @@ export function VaultClient() {
       return;
     }
 
+    if (action === "acled") {
+      await syncAcled();
+      return;
+    }
+
     if (action === "faa") {
       await syncFaa();
       return;
@@ -2161,6 +2220,7 @@ export function VaultClient() {
     eiaSync.error ||
     gdeltSync.error ||
     reliefWebSync.error ||
+    acledSync.error ||
     faaSync.error ||
     usgsSync.error ||
     treasurySync.error ||
@@ -2185,6 +2245,7 @@ export function VaultClient() {
     eiaSync.loading ||
     gdeltSync.loading ||
     reliefWebSync.loading ||
+    acledSync.loading ||
     faaSync.loading ||
     usgsSync.loading ||
     treasurySync.loading ||
@@ -2270,6 +2331,11 @@ export function VaultClient() {
       detail: connectorStatuses.reliefweb?.detail ?? "Provider approval or anti-bot clearance pending."
     },
     {
+      label: "ACLED conflict events",
+      key: "acled",
+      detail: connectorStatuses.acled?.detail ?? "Add myACLED credentials and confirm API access."
+    },
+    {
       label: "GDELT news stress",
       key: "gdelt",
       detail: connectorStatuses.gdelt?.detail ?? "Often rate-limits or times out during probes."
@@ -2334,6 +2400,8 @@ export function VaultClient() {
     "GEMINI_INTELLIGENCE_MODEL",
     "EIA_API_KEY",
     "RELIEFWEB_APP_NAME",
+    "ACLED_EMAIL",
+    "ACLED_PASSWORD",
     "APIFY_TOKEN"
   ];
   const curlExample = `curl -H "Authorization: Bearer $VAULT_API_KEY" \\\n  "${apiEndpoints.latest}"`;
@@ -2509,6 +2577,7 @@ export function VaultClient() {
                     (module.action === "eia" && eiaSync.loading) ||
                     (module.action === "gdelt" && gdeltSync.loading) ||
                     (module.action === "reliefweb" && reliefWebSync.loading) ||
+                    (module.action === "acled" && acledSync.loading) ||
                     (module.action === "faa" && faaSync.loading) ||
                     (module.action === "usgs" && usgsSync.loading) ||
                     (module.action === "treasury" && treasurySync.loading) ||
@@ -2613,6 +2682,23 @@ export function VaultClient() {
                   {!!reliefWebSync.data.failed?.length && (
                     <p className="error-text">{reliefWebSync.data.failed.length} ReliefWeb themes failed. Check sync logs for details.</p>
                   )}
+                </section>
+              )}
+              {acledSync.data && (
+                <section className="console-panel">
+                  <span className="micro-label">ACLED</span>
+                  <h2>Conflict event sync complete</h2>
+                  <p className="muted-line">
+                    {acledSync.data.storedEvents.toLocaleString()} new conflict events stored from{" "}
+                    {acledSync.data.totalEvents.toLocaleString()} candidates.
+                  </p>
+                  <p className="muted-line">
+                    {acledSync.data.fetchedRows.toLocaleString()} ACLED rows fetched
+                    {acledSync.data.totalAvailable !== null
+                      ? ` from ${acledSync.data.totalAvailable.toLocaleString()} available`
+                      : ""}
+                    ; {acledSync.data.duplicatesSkipped.toLocaleString()} duplicates skipped.
+                  </p>
                 </section>
               )}
               {faaSync.data && (
@@ -4213,7 +4299,15 @@ export function VaultClient() {
                           className={`status-dot ${
                             health.data?.env[key] || health.data?.optional?.[key]
                               ? "ok"
-                              : ["EIA_API_KEY", "RELIEFWEB_APP_NAME", "APIFY_TOKEN", "GEMINI_MODEL", "GEMINI_INTELLIGENCE_MODEL"].includes(key)
+                              : [
+                                    "EIA_API_KEY",
+                                    "RELIEFWEB_APP_NAME",
+                                    "ACLED_EMAIL",
+                                    "ACLED_PASSWORD",
+                                    "APIFY_TOKEN",
+                                    "GEMINI_MODEL",
+                                    "GEMINI_INTELLIGENCE_MODEL"
+                                  ].includes(key)
                                 ? "warning"
                                 : ""
                           }`}

@@ -44,6 +44,7 @@ Active connector priorities:
 - GDELT global news metadata: supply, credit, liquidity, and geopolitical stress events.
 - CFTC Commitments of Traders: leveraged-fund, asset-manager, managed-money, dealer, and open-interest positioning.
 - ReliefWeb humanitarian stress reports: conflict, displacement, food stress, and disaster metadata.
+- ACLED conflict event data: battles, protests, riots, explosions, civilian violence, actors, fatalities, and locations.
 - USGS earthquake telemetry: significant seismic events with magnitude, depth, alert, and coordinates.
 - FAA NAS Status: U.S. airport closures, ground stops, delay programs, deicing, and enroute flow constraints.
 - U.S. Treasury FiscalData: TGA balances, Treasury cash flows, and public debt outstanding.
@@ -105,6 +106,7 @@ POST /api/sync/eia
 POST /api/sync/eurostat
 POST /api/sync/gdelt
 POST /api/sync/reliefweb
+POST /api/sync/acled
 POST /api/sync/usgs
 POST /api/sync/faa
 POST /api/sync/treasury
@@ -145,6 +147,7 @@ Set these in Vercel Project Settings:
 - `FRED_API_KEY`
 - `EIA_API_KEY` optional for the EIA physical energy connector
 - `RELIEFWEB_APP_NAME` optional for the ReliefWeb connector; ReliefWeb requires an approved appname
+- `ACLED_EMAIL` and `ACLED_PASSWORD` optional for the ACLED connector; ACLED uses myACLED OAuth credentials and may require account-level API access
 - `FMP_API_KEY` optional for the economic calendar connector; the app can smoke-test with FMP demo access, but production should use a real key
 - `APIFY_TOKEN` optional; staged for later Apify actor imports
 

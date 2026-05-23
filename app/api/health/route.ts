@@ -75,6 +75,71 @@ async function probeSupabase(timeoutMs = 5000): Promise<ConnectorStatus> {
   }
 }
 
+async function probeAcled(timeoutMs = 5000): Promise<ConnectorStatus> {
+  const email = getOptionalEnv("ACLED_EMAIL");
+  const password = getOptionalEnv("ACLED_PASSWORD");
+  if (!email || !password) return missingConnector("ACLED_EMAIL and ACLED_PASSWORD are not configured.");
+
+  const started = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const tokenResponse = await fetch("https://acleddata.com/oauth/token", {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        username: email,
+        password,
+        grant_type: "password",
+        client_id: "acled",
+        scope: "authenticated"
+      })
+    });
+    const tokenPayload = await tokenResponse.json().catch(() => null);
+    const token =
+      tokenPayload && typeof tokenPayload === "object" && "access_token" in tokenPayload
+        ? String(tokenPayload.access_token)
+        : "";
+
+    if (!tokenResponse.ok || !token) {
+      return {
+        ok: false,
+        status: "warning",
+        latencyMs: Date.now() - started,
+        detail: `OAuth HTTP ${tokenResponse.status}`
+      };
+    }
+
+    const dataResponse = await fetch("https://acleddata.com/api/acled/read?limit=1", {
+      cache: "no-store",
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    return {
+      ok: dataResponse.ok,
+      status: dataResponse.ok ? "ok" : "warning",
+      latencyMs: Date.now() - started,
+      detail: dataResponse.ok ? "OAuth and data probe OK" : `Data probe HTTP ${dataResponse.status}`
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "warning",
+      latencyMs: Date.now() - started,
+      detail: formatError(error)
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function probeConnectors() {
   const fredKey = getOptionalEnv("FRED_API_KEY");
   const eiaKey = getOptionalEnv("EIA_API_KEY");
@@ -84,7 +149,7 @@ async function probeConnectors() {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
-  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, usgs, faaNas, treasury, cftc, fred, eia, fmp, gemini] = await Promise.all([
+  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, acled, usgs, faaNas, treasury, cftc, fred, eia, fmp, gemini] = await Promise.all([
     probeSupabase(),
     probeFetch("https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.CD?format=json&per_page=1"),
     probeFetch("https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/namq_10_gdp?format=JSON&lang=EN&freq=Q&s_adj=SCA&unit=CLV_PCH_PRE&na_item=B1GQ&geo=EU27_2020&sinceTimePeriod=2026-Q1"),
@@ -98,6 +163,7 @@ async function probeConnectors() {
           warnOnFailure: true
         })
       : Promise.resolve(missingConnector("RELIEFWEB_APP_NAME is not configured.")),
+    probeAcled(),
     probeFetch("https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&limit=1&minmagnitude=5"),
     probeFetch("https://nasstatus.faa.gov/api/airport-events"),
     probeFetch("https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?page[size]=1"),
@@ -128,6 +194,7 @@ async function probeConnectors() {
     alternativeMe,
     gdelt,
     reliefweb,
+    acled,
     usgs,
     faaNas,
     treasury,
@@ -148,6 +215,8 @@ export async function GET(request: NextRequest) {
     FRED_API_KEY: Boolean(getOptionalEnv("FRED_API_KEY")),
     EIA_API_KEY: Boolean(getOptionalEnv("EIA_API_KEY")),
     RELIEFWEB_APP_NAME: Boolean(getOptionalEnv("RELIEFWEB_APP_NAME")),
+    ACLED_EMAIL: Boolean(getOptionalEnv("ACLED_EMAIL")),
+    ACLED_PASSWORD: Boolean(getOptionalEnv("ACLED_PASSWORD")),
     FMP_API_KEY: Boolean(getOptionalEnv("FMP_API_KEY")),
     GEMINI_MODEL: Boolean(getOptionalEnv("GEMINI_MODEL")),
     GEMINI_INTELLIGENCE_MODEL: Boolean(getOptionalEnv("GEMINI_INTELLIGENCE_MODEL")),
