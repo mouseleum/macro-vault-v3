@@ -3,7 +3,7 @@ import { z } from "zod";
 import { assertVaultAuth } from "@/lib/auth";
 import { jsonError } from "@/lib/api";
 import { getOptionalEnv } from "@/lib/env";
-import { createMacroEvents, listMacroEvents } from "@/lib/intelligence-store";
+import { createMacroEvent, listMacroEvents, updateMacroEvent } from "@/lib/intelligence-store";
 import { recordSyncRun } from "@/lib/sync-log";
 import { createSupabaseAdmin } from "@/lib/supabase-server";
 import type { MacroEvent, SourceTier } from "@/types/vault";
@@ -117,6 +117,16 @@ function eventKey(event: Pick<MacroEvent, "event_date" | "title" | "country_code
   return [event.event_date, event.country_code ?? "WLD", event.category ?? "macro_event", event.title.toLowerCase()].join("|");
 }
 
+function eventMetadata(event: Pick<MacroEvent, "metadata">) {
+  return event.metadata && typeof event.metadata === "object" ? (event.metadata as Record<string, unknown>) : {};
+}
+
+const releaseFields = ["actual", "forecast", "previous"] as const;
+
+function hasNewReleaseValues(incoming: Record<string, unknown>, existing: Record<string, unknown>) {
+  return releaseFields.some((field) => incoming[field] != null && incoming[field] !== existing[field]);
+}
+
 async function fetchFmpCalendar(input: z.infer<typeof syncSchema>) {
   const apiKey = getOptionalEnv("FMP_API_KEY") ?? "demo";
   const url = new URL("https://financialmodelingprep.com/stable/economic-calendar");
@@ -158,14 +168,67 @@ export async function POST(request: NextRequest) {
       .filter((event): event is Omit<MacroEvent, "id" | "created_at"> => Boolean(event))
       .filter((event) => !country || event.country_code === country)
       .slice(0, input.limit);
+    // Scope the dedup query to the sync window; the key includes event_date, so
+    // only events inside [from, to] can collide. A "latest N rows" scan misses
+    // older events once the table grows.
     const existingEvents = await listMacroEvents(supabase, {
-      limit: 500,
+      limit: 2000,
       category: "economic_calendar",
-      country
+      country,
+      from,
+      to
     });
-    const existingKeys = new Set(existingEvents.map(eventKey));
-    const events = normalizedEvents.filter((event) => !existingKeys.has(eventKey(event)));
-    const storedEvents = await createMacroEvents(supabase, events);
+    const existingByKey = new Map(existingEvents.map((event) => [eventKey(event), event] as const));
+
+    const newEvents: typeof normalizedEvents = [];
+    const releaseUpdates: Array<{ id: string; patch: Partial<MacroEvent> }> = [];
+
+    for (const event of normalizedEvents) {
+      const existing = existingByKey.get(eventKey(event));
+      if (!existing) {
+        newEvents.push(event);
+        continue;
+      }
+
+      const incomingMetadata = eventMetadata(event);
+      const existingMetadata = eventMetadata(existing);
+      if (!hasNewReleaseValues(incomingMetadata, existingMetadata)) continue;
+
+      releaseUpdates.push({
+        id: existing.id,
+        patch: {
+          narrative: event.narrative,
+          impact_score: event.impact_score ?? existing.impact_score,
+          metadata: {
+            // Keep keys the sync doesn't own (e.g. prep_notes) and never
+            // overwrite a stored release value with null.
+            ...existingMetadata,
+            ...Object.fromEntries(Object.entries(incomingMetadata).filter(([, value]) => value != null))
+          }
+        }
+      });
+    }
+
+    const storedEvents: MacroEvent[] = [];
+    let conflictSkipped = 0;
+    for (const event of newEvents) {
+      try {
+        storedEvents.push(await createMacroEvent(supabase, event));
+      } catch (error) {
+        // The unique index on calendar events is the authoritative dedup; treat
+        // a violation as an already-stored event rather than a sync failure.
+        if ((error as { code?: string } | null)?.code === "23505") {
+          conflictSkipped += 1;
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const updatedEvents: MacroEvent[] = [];
+    for (const update of releaseUpdates) {
+      updatedEvents.push(await updateMacroEvent(supabase, update.id, update.patch));
+    }
 
     await recordSyncRun(supabase, {
       connector: "economic_calendar",
@@ -174,14 +237,15 @@ export async function POST(request: NextRequest) {
       startedAt,
       durationMs: Date.now() - startedMs,
       totalSeries: 0,
-      totalObservations: storedEvents.length,
+      totalObservations: storedEvents.length + updatedEvents.length,
       details: {
         provider: "fmp",
         from,
         to,
         usedDemoKey: !getOptionalEnv("FMP_API_KEY"),
         totalFetched: records.length,
-        duplicatesSkipped: normalizedEvents.length - events.length
+        updatedEvents: updatedEvents.length,
+        duplicatesSkipped: normalizedEvents.length - newEvents.length - releaseUpdates.length + conflictSkipped
       }
     });
 
@@ -191,10 +255,11 @@ export async function POST(request: NextRequest) {
       fallback: !getOptionalEnv("FMP_API_KEY"),
       totalEvents: records.length,
       storedEvents: storedEvents.length,
+      updatedEvents: updatedEvents.length,
       failedCount: records.length - normalizedEvents.length,
       from,
       to,
-      events: storedEvents
+      events: [...storedEvents, ...updatedEvents]
     });
   } catch (error) {
     await recordSyncRun(supabase, {
