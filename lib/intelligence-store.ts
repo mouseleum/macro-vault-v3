@@ -367,6 +367,8 @@ export async function listMacroEvents(
     country?: string | null;
     category?: string | null;
     q?: string | null;
+    from?: string | null;
+    to?: string | null;
   } = {}
 ) {
   const limit = filters.limit ?? 50;
@@ -374,6 +376,8 @@ export async function listMacroEvents(
 
   if (filters.country) query = query.eq("country_code", filters.country.toUpperCase());
   if (filters.category) query = query.eq("category", filters.category);
+  if (filters.from) query = query.gte("event_date", filters.from);
+  if (filters.to) query = query.lte("event_date", filters.to);
 
   const { data, error } = await query.order("event_date", { ascending: false }).limit(limit);
 
@@ -384,6 +388,8 @@ export async function listMacroEvents(
       return store.events
         .filter((event) => !filters.country || event.country_code === filters.country?.toUpperCase())
         .filter((event) => !filters.category || event.category === filters.category)
+        .filter((event) => !filters.from || event.event_date >= filters.from)
+        .filter((event) => !filters.to || event.event_date <= filters.to)
         .filter((event) =>
           search
             ? [event.title, event.narrative, event.category, event.country_code, event.source_title]
@@ -448,6 +454,32 @@ export async function createMacroEvents(
   }
 
   return stored;
+}
+
+export async function updateMacroEvent(
+  supabase: SupabaseClient,
+  id: string,
+  patch: Partial<Omit<MacroEvent, "id" | "created_at">>
+) {
+  const { data, error } = await supabase.from("macro_events").update(patch).eq("id", id).select("*").single();
+
+  if (error) {
+    if (canUseFallback(error)) {
+      const store = await getFallbackIntelligenceStore(supabase);
+      const existing = store.events.find((event) => event.id === id);
+      if (!existing) throw new Error("Macro event not found");
+      const updated: MacroEvent = { ...existing, ...patch };
+      await writeFallbackIntelligenceStore(supabase, {
+        ...store,
+        events: store.events.map((event) => (event.id === id ? updated : event))
+      });
+      return updated;
+    }
+
+    throw error;
+  }
+
+  return data as MacroEvent;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

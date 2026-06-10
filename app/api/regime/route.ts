@@ -37,10 +37,10 @@ function getGeminiErrorSignal(error: unknown) {
 
   const code =
     Number(errorRecord.code ?? errorRecord.status ?? nested.code) ||
-    Number(message.match(/"code"\\s*:\\s*(\\d+)/)?.[1]) ||
+    Number(message.match(/"code"\s*:\s*(\d+)/)?.[1]) ||
     undefined;
   const status =
-    String(errorRecord.statusText ?? nested.status ?? message.match(/"status"\\s*:\\s*"([^"]+)"/)?.[1] ?? "") ||
+    String(errorRecord.statusText ?? nested.status ?? message.match(/"status"\s*:\s*"([^"]+)"/)?.[1] ?? "") ||
     undefined;
 
   return { code, status, message };

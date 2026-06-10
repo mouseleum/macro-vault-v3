@@ -72,6 +72,24 @@ create index if not exists intelligence_candidates_series_date_idx
 create index if not exists macro_events_date_idx
   on public.macro_events (event_date desc);
 
+-- Remove duplicate calendar events (keeping the earliest row, which carries any
+-- prep_notes) so the unique index below can be created on existing databases.
+delete from public.macro_events dup
+using public.macro_events keeper
+where dup.category = 'economic_calendar'
+  and keeper.category = 'economic_calendar'
+  and dup.event_date = keeper.event_date
+  and coalesce(dup.country_code, 'WLD') = coalesce(keeper.country_code, 'WLD')
+  and lower(dup.title) = lower(keeper.title)
+  and (keeper.created_at < dup.created_at
+    or (keeper.created_at = dup.created_at and keeper.id < dup.id));
+
+-- Authoritative dedup for the economic-calendar sync; the connector treats a
+-- unique violation (23505) as an already-stored event.
+create unique index if not exists macro_events_calendar_dedup_idx
+  on public.macro_events (event_date, coalesce(country_code, 'WLD'), lower(title))
+  where category = 'economic_calendar';
+
 alter table public.knowledge_documents enable row level security;
 alter table public.intelligence_candidates enable row level security;
 alter table public.macro_events enable row level security;
