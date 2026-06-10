@@ -30,19 +30,31 @@ export function clampLimit(value: string | null, fallback = 50, max = 500) {
 }
 
 export async function listSeries(supabase: SupabaseClient, filters: SeriesFilters) {
-  let query = supabase.from("macro_series").select(seriesSelect);
-
-  if (filters.provider) query = query.eq("provider", filters.provider);
-  if (filters.country) query = query.eq("country_code", filters.country.toUpperCase());
-
-  const { data, error } = await query
-    .order("provider", { ascending: true })
-    .order("series_code", { ascending: true });
-
-  if (error) throw error;
-
   const search = filters.q?.trim().toLowerCase();
-  const series = (data ?? []) as MacroSeries[];
+  const limit = filters.limit ?? 500;
+  // Supabase caps each response at 1000 rows, so page with .range() until the
+  // last partial page; otherwise totals and text search silently truncate.
+  const pageSize = 1000;
+  const series: MacroSeries[] = [];
+
+  for (let offset = 0; ; offset += pageSize) {
+    let query = supabase.from("macro_series").select(seriesSelect);
+
+    if (filters.provider) query = query.eq("provider", filters.provider);
+    if (filters.country) query = query.eq("country_code", filters.country.toUpperCase());
+
+    const { data, error } = await query
+      .order("provider", { ascending: true })
+      .order("series_code", { ascending: true })
+      .range(offset, offset + pageSize - 1);
+
+    if (error) throw error;
+
+    const page = (data ?? []) as MacroSeries[];
+    series.push(...page);
+    if (page.length < pageSize) break;
+    if (!search && series.length >= limit) break;
+  }
   const filtered = search
     ? series.filter((item) =>
         [item.series_code, item.name, item.provider, item.country_code]
@@ -51,7 +63,7 @@ export async function listSeries(supabase: SupabaseClient, filters: SeriesFilter
       )
     : series;
 
-  return filtered.slice(0, filters.limit ?? 500);
+  return filtered.slice(0, limit);
 }
 
 export async function findSeries(supabase: SupabaseClient, locator: SeriesLocator) {
