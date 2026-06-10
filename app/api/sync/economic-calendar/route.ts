@@ -3,7 +3,7 @@ import { z } from "zod";
 import { assertVaultAuth } from "@/lib/auth";
 import { jsonError } from "@/lib/api";
 import { getOptionalEnv } from "@/lib/env";
-import { createMacroEvent, listMacroEvents, updateMacroEvent } from "@/lib/intelligence-store";
+import { createMacroEvent, createMacroEvents, listMacroEvents, updateMacroEvent } from "@/lib/intelligence-store";
 import { recordSyncRun } from "@/lib/sync-log";
 import { createSupabaseAdmin } from "@/lib/supabase-server";
 import type { MacroEvent, SourceTier } from "@/types/vault";
@@ -209,19 +209,25 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const storedEvents: MacroEvent[] = [];
+    let storedEvents: MacroEvent[] = [];
     let conflictSkipped = 0;
-    for (const event of newEvents) {
-      try {
-        storedEvents.push(await createMacroEvent(supabase, event));
-      } catch (error) {
-        // The unique index on calendar events is the authoritative dedup; treat
-        // a violation as an already-stored event rather than a sync failure.
-        if ((error as { code?: string } | null)?.code === "23505") {
-          conflictSkipped += 1;
-          continue;
+    try {
+      storedEvents = await createMacroEvents(supabase, newEvents);
+    } catch (batchError) {
+      if ((batchError as { code?: string } | null)?.code !== "23505") throw batchError;
+      // The batch hit the unique index on calendar events (in-app dedup raced a
+      // concurrent sync or read stale rows). The index is the authoritative
+      // dedup, so retry row by row and treat violations as already stored.
+      for (const event of newEvents) {
+        try {
+          storedEvents.push(await createMacroEvent(supabase, event));
+        } catch (error) {
+          if ((error as { code?: string } | null)?.code === "23505") {
+            conflictSkipped += 1;
+            continue;
+          }
+          throw error;
         }
-        throw error;
       }
     }
 

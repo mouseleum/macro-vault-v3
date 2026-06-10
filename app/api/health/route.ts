@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAcledToken } from "@/lib/acled";
 import { assertVaultAuth } from "@/lib/auth";
 import { getEnv, getEnvStatus, getOptionalEnv } from "@/lib/env";
 import { createSupabaseAdmin } from "@/lib/supabase-server";
@@ -85,35 +86,9 @@ async function probeAcled(timeoutMs = 5000): Promise<ConnectorStatus> {
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const tokenResponse = await fetch("https://acleddata.com/oauth/token", {
-      method: "POST",
-      cache: "no-store",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded"
-      },
-      body: new URLSearchParams({
-        username: email,
-        password,
-        grant_type: "password",
-        client_id: "acled",
-        scope: "authenticated"
-      })
-    });
-    const tokenPayload = await tokenResponse.json().catch(() => null);
-    const token =
-      tokenPayload && typeof tokenPayload === "object" && "access_token" in tokenPayload
-        ? String(tokenPayload.access_token)
-        : "";
-
-    if (!tokenResponse.ok || !token) {
-      return {
-        ok: false,
-        status: "warning",
-        latencyMs: Date.now() - started,
-        detail: `OAuth HTTP ${tokenResponse.status}`
-      };
-    }
+    // getAcledToken caches the token at module scope, so this only performs a
+    // password grant when the cache is cold or the token is near expiry.
+    const token = await getAcledToken(email, password, { signal: controller.signal });
 
     const dataResponse = await fetch("https://acleddata.com/api/acled/read?limit=1", {
       cache: "no-store",
