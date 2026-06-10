@@ -447,13 +447,30 @@ export async function createMacroEvents(
   supabase: SupabaseClient,
   events: Array<Omit<MacroEvent, "id" | "created_at">>
 ) {
-  const stored: MacroEvent[] = [];
+  if (events.length === 0) return [];
 
-  for (const event of events) {
-    stored.push(await createMacroEvent(supabase, event));
+  const { data, error } = await supabase.from("macro_events").insert(events).select("*");
+
+  if (error) {
+    if (canUseFallback(error)) {
+      const now = new Date().toISOString();
+      const storedEvents = events.map((event) => ({
+        id: crypto.randomUUID(),
+        created_at: now,
+        ...event
+      })) as MacroEvent[];
+      const store = await getFallbackIntelligenceStore(supabase);
+      await writeFallbackIntelligenceStore(supabase, {
+        ...store,
+        events: [...storedEvents.slice().reverse(), ...store.events].slice(0, 500)
+      });
+      return storedEvents;
+    }
+
+    throw error;
   }
 
-  return stored;
+  return (data ?? []) as MacroEvent[];
 }
 
 export async function updateMacroEvent(
