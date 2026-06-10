@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { getAcledToken } from "@/lib/acled";
 import { assertVaultAuth } from "@/lib/auth";
 import { jsonError } from "@/lib/api";
 import { getOptionalEnv } from "@/lib/env";
@@ -10,7 +11,6 @@ import type { MacroEvent, SourceTier } from "@/types/vault";
 
 export const runtime = "nodejs";
 
-const acledTokenUrl = "https://acleddata.com/oauth/token";
 const acledReadUrl = "https://acleddata.com/api/acled/read";
 const sourceTier: SourceTier = "licensed";
 
@@ -180,33 +180,6 @@ function impactScore(category: AcledCategory, fatalities: number | null, civilia
             : 8;
   const civilianBoost = civilianTargeting?.toLowerCase() === "civilian targeting" ? 10 : 0;
   return Math.min(100, baseScores[category] + fatalityBoost + civilianBoost);
-}
-
-async function getAcledToken(email: string, password: string) {
-  const body = new URLSearchParams({
-    username: email,
-    password,
-    grant_type: "password",
-    client_id: "acled",
-    scope: "authenticated"
-  });
-  const response = await fetch(acledTokenUrl, {
-    method: "POST",
-    cache: "no-store",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded"
-    },
-    body
-  });
-  const payload = await response.json().catch(() => null);
-  const token = isRecord(payload) ? stringValue(payload.access_token) : null;
-
-  if (!response.ok || !token) {
-    const message = isRecord(payload) ? stringValue(payload.error_description) ?? stringValue(payload.message) : null;
-    throw new Error(`ACLED OAuth failed: HTTP ${response.status}${message ? ` - ${message}` : ""}`);
-  }
-
-  return token;
 }
 
 async function fetchAcledRows(token: string, input: z.infer<typeof querySchema>) {
