@@ -245,8 +245,7 @@ export async function POST(request: NextRequest) {
       // Forex Factory always returns the current week regardless of the
       // requested window, so apply [from, to] here for both providers.
       .filter((event) => event.event_date >= from && event.event_date <= to)
-      .filter((event) => !country || event.country_code === country)
-      .slice(0, input.limit);
+      .filter((event) => !country || event.country_code === country);
     // Scope the dedup query to the sync window; the key includes event_date, so
     // only events inside [from, to] can collide. A "latest N rows" scan misses
     // older events once the table grows.
@@ -259,7 +258,7 @@ export async function POST(request: NextRequest) {
     });
     const existingByKey = new Map(existingEvents.map((event) => [eventKey(event), event] as const));
 
-    const newEvents: typeof normalizedEvents = [];
+    let newEvents: typeof normalizedEvents = [];
     const releaseUpdates: Array<{ id: string; patch: Partial<MacroEvent> }> = [];
 
     for (const event of normalizedEvents) {
@@ -287,6 +286,12 @@ export async function POST(request: NextRequest) {
         }
       });
     }
+
+    // Cap new stores per run *after* dedup: capping before it would let
+    // already-stored events crowd out the tail of the window on every sync,
+    // so late-week events would never be stored.
+    const limitSkipped = Math.max(newEvents.length - input.limit, 0);
+    newEvents = newEvents.slice(0, input.limit);
 
     let storedEvents: MacroEvent[] = [];
     let conflictSkipped = 0;
@@ -330,7 +335,9 @@ export async function POST(request: NextRequest) {
         usedDemoKey: input.provider === "fmp" && !getOptionalEnv("FMP_API_KEY"),
         totalFetched: records.length,
         updatedEvents: updatedEvents.length,
-        duplicatesSkipped: normalizedEvents.length - newEvents.length - releaseUpdates.length + conflictSkipped
+        limitSkipped,
+        duplicatesSkipped:
+          normalizedEvents.length - newEvents.length - limitSkipped - releaseUpdates.length + conflictSkipped
       }
     });
 
@@ -341,6 +348,7 @@ export async function POST(request: NextRequest) {
       totalEvents: records.length,
       storedEvents: storedEvents.length,
       updatedEvents: updatedEvents.length,
+      limitSkipped,
       failedCount: records.length - normalizedEvents.length,
       from,
       to,
