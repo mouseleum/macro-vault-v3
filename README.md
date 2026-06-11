@@ -114,6 +114,7 @@ POST /api/sync/cftc
 POST /api/sync/fx
 POST /api/sync/fear-greed
 POST /api/sync/economic-calendar
+GET  /api/cron/calendar-sync
 POST /api/regime
 POST /api/knowledge/documents
 POST /api/intelligence/extract
@@ -148,6 +149,7 @@ Set these in Vercel Project Settings:
 - `EIA_API_KEY` optional for the EIA physical energy connector
 - `RELIEFWEB_APP_NAME` optional for the ReliefWeb connector; ReliefWeb requires an approved appname
 - `ACLED_EMAIL` and `ACLED_PASSWORD` optional for the ACLED connector; ACLED uses myACLED OAuth credentials and may require account-level API access
+- `CRON_SECRET` optional; enables the daily Vercel cron (05:30 UTC, vercel.json) that runs the economic-calendar sync
 - `FMP_API_KEY` optional for the economic calendar connector's `fmp` provider (post-release actuals require a paid FMP plan); the default `forex_factory` provider uses the free Forex Factory weekly feed and needs no key
 - `APIFY_TOKEN` optional; staged for later Apify actor imports
 
