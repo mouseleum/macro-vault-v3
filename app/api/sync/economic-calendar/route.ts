@@ -11,14 +11,16 @@ import type { MacroEvent, SourceTier } from "@/types/vault";
 export const runtime = "nodejs";
 
 const syncSchema = z.object({
-  provider: z.enum(["fmp"]).default("fmp"),
+  // forex_factory is the default: a free weekly feed with forecasts but no
+  // post-release actuals. fmp carries actuals but needs a paid FMP plan.
+  provider: z.enum(["forex_factory", "fmp"]).default("forex_factory"),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   country: z.string().trim().min(2).max(3).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(60)
 });
 
-type FmpCalendarRecord = Record<string, unknown>;
+type CalendarRecord = Record<string, unknown>;
 
 function isoDate(value: Date) {
   return value.toISOString().slice(0, 10);
@@ -30,7 +32,7 @@ function addDays(value: Date, days: number) {
   return next;
 }
 
-function stringValue(record: FmpCalendarRecord, keys: string[]) {
+function stringValue(record: CalendarRecord, keys: string[]) {
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -56,7 +58,7 @@ function normalizeCountry(value: string | null) {
   return common[value.toLowerCase()] ?? value.slice(0, 3).toUpperCase();
 }
 
-function normalizeImpact(record: FmpCalendarRecord) {
+function normalizeImpact(record: CalendarRecord) {
   const raw = stringValue(record, ["impact", "importance", "volatility", "priority"]);
   if (!raw) return null;
   const normalized = raw.toLowerCase();
@@ -66,7 +68,7 @@ function normalizeImpact(record: FmpCalendarRecord) {
   return null;
 }
 
-function normalizeFmpCalendarRecord(record: FmpCalendarRecord): Omit<MacroEvent, "id" | "created_at"> | null {
+function normalizeFmpCalendarRecord(record: CalendarRecord): Omit<MacroEvent, "id" | "created_at"> | null {
   const title = stringValue(record, ["event", "name", "title", "indicator"]);
   const dateRaw = stringValue(record, ["date", "dateUtc", "datetime", "time"]);
   if (!title || !dateRaw) return null;
@@ -113,6 +115,63 @@ function normalizeFmpCalendarRecord(record: FmpCalendarRecord): Omit<MacroEvent,
   };
 }
 
+// Forex Factory tags events with the affected currency rather than a country.
+const forexFactoryCurrencyCountries: Record<string, string> = {
+  USD: "US",
+  EUR: "EMU",
+  GBP: "GB",
+  JPY: "JP",
+  CAD: "CA",
+  AUD: "AU",
+  NZD: "NZ",
+  CHF: "CH",
+  CNY: "CN",
+  ALL: "WLD"
+};
+
+function normalizeForexFactoryRecord(record: CalendarRecord): Omit<MacroEvent, "id" | "created_at"> | null {
+  const title = stringValue(record, ["title"]);
+  const dateRaw = stringValue(record, ["date"]);
+  if (!title || !dateRaw) return null;
+
+  const eventDate = dateRaw.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) return null;
+
+  const currency = stringValue(record, ["country"]);
+  const country = forexFactoryCurrencyCountries[currency?.toUpperCase() ?? ""] ?? "WLD";
+  const forecast = stringValue(record, ["forecast"]);
+  const previous = stringValue(record, ["previous"]);
+  const impactScore = normalizeImpact(record);
+
+  return {
+    event_date: eventDate,
+    title,
+    narrative: [title, forecast ? `forecast ${forecast}` : null, previous ? `previous ${previous}` : null]
+      .filter(Boolean)
+      .join(" / "),
+    category: "economic_calendar",
+    country_code: country,
+    region: country,
+    impact_score: impactScore,
+    confidence: 0.8,
+    source_url: "https://www.forexfactory.com/calendar",
+    source_title: "Forex Factory Economic Calendar",
+    source_tier: "public_web" as SourceTier,
+    metadata: {
+      source: "economic_calendar",
+      provider: "forex_factory",
+      provider_record: record,
+      // The weekly feed never carries actuals; a provider with actuals (e.g.
+      // fmp on a paid plan) can fill them in later via the re-sync update path.
+      actual: null,
+      forecast,
+      previous,
+      currency,
+      impact_score: impactScore
+    }
+  };
+}
+
 function eventKey(event: Pick<MacroEvent, "event_date" | "title" | "country_code" | "category">) {
   return [event.event_date, event.country_code ?? "WLD", event.category ?? "macro_event", event.title.toLowerCase()].join("|");
 }
@@ -145,7 +204,22 @@ async function fetchFmpCalendar(input: z.infer<typeof syncSchema>) {
     throw new Error("FMP economic calendar returned an unexpected payload.");
   }
 
-  return data as FmpCalendarRecord[];
+  return data as CalendarRecord[];
+}
+
+async function fetchForexFactoryCalendar() {
+  const response = await fetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json", { cache: "no-store" });
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(`Forex Factory calendar request failed: HTTP ${response.status}`);
+  }
+
+  if (!Array.isArray(data)) {
+    throw new Error("Forex Factory calendar returned an unexpected payload.");
+  }
+
+  return data as CalendarRecord[];
 }
 
 export async function POST(request: NextRequest) {
@@ -161,11 +235,16 @@ export async function POST(request: NextRequest) {
     const from = parsed.from ?? isoDate(addDays(new Date(), -7));
     const to = parsed.to ?? isoDate(addDays(new Date(), 30));
     const input = { ...parsed, from, to };
-    const records = await fetchFmpCalendar(input);
+    const records =
+      input.provider === "fmp" ? await fetchFmpCalendar(input) : await fetchForexFactoryCalendar();
+    const normalizeRecord = input.provider === "fmp" ? normalizeFmpCalendarRecord : normalizeForexFactoryRecord;
     const country = input.country?.toUpperCase();
     const normalizedEvents = records
-      .map(normalizeFmpCalendarRecord)
+      .map(normalizeRecord)
       .filter((event): event is Omit<MacroEvent, "id" | "created_at"> => Boolean(event))
+      // Forex Factory always returns the current week regardless of the
+      // requested window, so apply [from, to] here for both providers.
+      .filter((event) => event.event_date >= from && event.event_date <= to)
       .filter((event) => !country || event.country_code === country)
       .slice(0, input.limit);
     // Scope the dedup query to the sync window; the key includes event_date, so
@@ -238,17 +317,17 @@ export async function POST(request: NextRequest) {
 
     await recordSyncRun(supabase, {
       connector: "economic_calendar",
-      action: "fmp_calendar",
+      action: `${input.provider}_calendar`,
       status: "success",
       startedAt,
       durationMs: Date.now() - startedMs,
       totalSeries: 0,
       totalObservations: storedEvents.length + updatedEvents.length,
       details: {
-        provider: "fmp",
+        provider: input.provider,
         from,
         to,
-        usedDemoKey: !getOptionalEnv("FMP_API_KEY"),
+        usedDemoKey: input.provider === "fmp" && !getOptionalEnv("FMP_API_KEY"),
         totalFetched: records.length,
         updatedEvents: updatedEvents.length,
         duplicatesSkipped: normalizedEvents.length - newEvents.length - releaseUpdates.length + conflictSkipped
@@ -257,8 +336,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      provider: "fmp",
-      fallback: !getOptionalEnv("FMP_API_KEY"),
+      provider: input.provider,
+      fallback: input.provider === "fmp" && !getOptionalEnv("FMP_API_KEY"),
       totalEvents: records.length,
       storedEvents: storedEvents.length,
       updatedEvents: updatedEvents.length,
@@ -270,7 +349,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     await recordSyncRun(supabase, {
       connector: "economic_calendar",
-      action: "fmp_calendar",
+      action: "calendar",
       status: "failed",
       startedAt,
       durationMs: Date.now() - startedMs,
