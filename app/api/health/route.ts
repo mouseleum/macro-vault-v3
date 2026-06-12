@@ -124,7 +124,7 @@ async function probeConnectors() {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
-  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, acled, usgs, faaNas, treasury, cftc, fred, eia, fmp, gemini] = await Promise.all([
+  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, acled, usgs, faaNas, treasury, cftc, fred, eia, forexFactory, fmp, gemini] = await Promise.all([
     probeSupabase(),
     probeFetch("https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.CD?format=json&per_page=1"),
     probeFetch("https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/namq_10_gdp?format=JSON&lang=EN&freq=Q&s_adj=SCA&unit=CLV_PCH_PRE&na_item=B1GQ&geo=EU27_2020&sinceTimePeriod=2026-Q1"),
@@ -151,11 +151,16 @@ async function probeConnectors() {
     eiaKey
       ? probeFetch(`https://api.eia.gov/v2/seriesid/PET.RWTC.D?length=1&api_key=${encodeURIComponent(eiaKey)}`)
       : Promise.resolve(missingConnector("EIA_API_KEY is not configured.")),
+    probeFetch("https://nfs.faireconomy.media/ff_calendar_thisweek.json"),
+    // FMP is optional: only a paid plan unlocks the calendar endpoint, so a
+    // failing probe (e.g. HTTP 402 on a free key) must not break overall health.
     fmpKey
       ? probeFetch(
-          `https://financialmodelingprep.com/stable/economic-calendar?from=${today}&to=${tomorrow}&apikey=${encodeURIComponent(fmpKey)}`
+          `https://financialmodelingprep.com/stable/economic-calendar?from=${today}&to=${tomorrow}&apikey=${encodeURIComponent(fmpKey)}`,
+          5000,
+          { warnOnFailure: true }
         )
-      : Promise.resolve(missingConnector("FMP_API_KEY is not configured.")),
+      : Promise.resolve(missingConnector("FMP_API_KEY is not configured. Optional: a paid FMP key adds post-release actuals.")),
     geminiKey
       ? probeFetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(geminiKey)}`)
       : Promise.resolve(missingConnector("GEMINI_API_KEY is not configured."))
@@ -176,6 +181,7 @@ async function probeConnectors() {
     cftc,
     fred,
     eia,
+    forexFactory,
     fmp,
     gemini
   };
