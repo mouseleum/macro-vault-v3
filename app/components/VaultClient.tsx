@@ -1954,7 +1954,7 @@ export function VaultClient() {
           method: "POST",
           headers: authHeaders,
           body: JSON.stringify({
-            provider: "fmp",
+            provider: "forex_factory",
             limit: 60
           })
         })
@@ -2307,7 +2307,7 @@ export function VaultClient() {
     "alternativeMe",
     "cftc",
     "fred",
-    "fmp",
+    "forexFactory",
     "gemini",
     "treasury",
     "usgs",
@@ -2339,6 +2339,11 @@ export function VaultClient() {
       label: "GDELT news stress",
       key: "gdelt",
       detail: connectorStatuses.gdelt?.detail ?? "Often rate-limits or times out during probes."
+    },
+    {
+      label: "FMP post-release actuals",
+      key: "fmp",
+      detail: connectorStatuses.fmp?.detail ?? "Add a paid FMP_API_KEY to fill realized surprises."
     }
   ];
   const deploymentChecks = [
@@ -2794,8 +2799,9 @@ export function VaultClient() {
                   <span className="micro-label">Economic Calendar</span>
                   <h2>Calendar sync complete</h2>
                   <p className="muted-line">
-                    {calendarSync.data.storedEvents.toLocaleString()} events stored from {calendarSync.data.provider.toUpperCase()} for{" "}
-                    {calendarSync.data.from} to {calendarSync.data.to}.
+                    {calendarSync.data.storedEvents.toLocaleString()} events stored from{" "}
+                    {calendarSync.data.provider === "fmp" ? "FMP" : "Forex Factory"} for {calendarSync.data.from} to{" "}
+                    {calendarSync.data.to}.
                   </p>
                   {calendarSync.data.fallback && (
                     <p className="muted-line">Using the FMP demo key. Add FMP_API_KEY for stable production usage.</p>
@@ -3239,7 +3245,7 @@ export function VaultClient() {
                 <section className="console-panel calendar-sync-result">
                   <div>
                     <span className="micro-label">Calendar Sync</span>
-                    <h2>FMP calendar refreshed</h2>
+                    <h2>{calendarSync.data.provider === "fmp" ? "FMP" : "Forex Factory"} calendar refreshed</h2>
                   </div>
                   <p className="muted-line">
                     {calendarSync.data.storedEvents.toLocaleString()} events stored for {calendarSync.data.from} to {calendarSync.data.to}.
@@ -4305,6 +4311,7 @@ export function VaultClient() {
                                     "ACLED_EMAIL",
                                     "ACLED_PASSWORD",
                                     "APIFY_TOKEN",
+                                    "FMP_API_KEY",
                                     "GEMINI_MODEL",
                                     "GEMINI_INTELLIGENCE_MODEL"
                                   ].includes(key)

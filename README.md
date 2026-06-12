@@ -33,7 +33,7 @@ Good downstream-app responsibilities:
 - Split the deployed surface into a clean option 4 architecture: a stable
   server-to-server vault API protected by project keys, plus a dashboard/workbench
   protected separately with Clerk or another user auth layer.
-- Add Alpha Vantage as an optional market-proxy connector for daily reaction assets such as SPY, QQQ, IWM, TLT, HYG, LQD, GLD, UUP, oil, copper, and natural gas. Keep this after the core FMP calendar, FRED, regime, intelligence, Vercel, and Clerk work because the free tier is useful but limited.
+- Add Alpha Vantage as an optional market-proxy connector for daily reaction assets such as SPY, QQQ, IWM, TLT, HYG, LQD, GLD, UUP, oil, copper, and natural gas. Keep this after the core Forex Factory calendar, FRED, regime, intelligence, Vercel, and Clerk work because the free tier is useful but limited.
 
 ## Data Source Roadmap
 

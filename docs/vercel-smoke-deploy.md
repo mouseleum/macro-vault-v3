@@ -66,7 +66,6 @@ SUPABASE_ANON_KEY
 SUPABASE_SERVICE_ROLE_KEY
 GEMINI_API_KEY
 FRED_API_KEY
-FMP_API_KEY
 ```
 
 ## Optional Environment Variables
@@ -74,6 +73,7 @@ FMP_API_KEY
 Add now if available, otherwise leave for later:
 
 ```txt
+FMP_API_KEY
 GEMINI_MODEL
 GEMINI_INTELLIGENCE_MODEL
 EIA_API_KEY
