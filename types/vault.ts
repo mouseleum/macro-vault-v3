@@ -181,6 +181,27 @@ export type MacroDashboardEvent = MacroEvent & {
   prep_notes: MacroEventPrepNotes | null;
 };
 
+// Opportunity rows surfaced from promoted engine reports (macro_events with
+// category "engine_opportunity"). Shape matches what the Asymmetric Macro
+// Finder dashboard parses directly (label/report/coordinates/basket/etc.).
+export type MacroDashboardOpportunity = {
+  id: string;
+  label: string;
+  status: "opportunity";
+  severity: "low" | "medium" | "high" | "extreme";
+  conviction: number;
+  divergenceScore: number;
+  coordinates: unknown;
+  assetBasket: unknown;
+  catalysts: string[];
+  invalidation: string | null;
+  report: string | null;
+  rawTelemetry: unknown;
+  situation: string;
+  updatedAt: string;
+  sources: Array<{ title: string | null; url: string | null }>;
+};
+
 export type MacroDashboardFeedResponse = {
   summary: {
     totalSeries: number;
@@ -188,6 +209,7 @@ export type MacroDashboardFeedResponse = {
     latestSynced: string | null;
   };
   regime: Record<string, unknown> | null;
+  opportunities: MacroDashboardOpportunity[];
   upcomingCriticalEvents: MacroDashboardEvent[];
   realizedSurprises: MacroDashboardEvent[];
   narrativeSignals: MacroEvent[];

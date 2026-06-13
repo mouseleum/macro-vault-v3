@@ -5,7 +5,15 @@ import { jsonError } from "@/lib/api";
 import { listMacroEvents } from "@/lib/intelligence-store";
 import { createSupabaseAdmin } from "@/lib/supabase-server";
 import { getLatestRegime, listSeries } from "@/lib/vault-store";
-import type { MacroDashboardEvent, MacroEvent, MacroEventPrepNotes } from "@/types/vault";
+import type {
+  MacroDashboardEvent,
+  MacroDashboardOpportunity,
+  MacroEvent,
+  MacroEventPrepNotes
+} from "@/types/vault";
+
+// macro_events carrying a promoted engine report use this category.
+const ENGINE_OPPORTUNITY_CATEGORY = "engine_opportunity";
 
 export const runtime = "nodejs";
 
@@ -37,6 +45,48 @@ function eventMetadataText(event: MacroEvent, key: string) {
 
 function isEconomicCalendarEvent(event: MacroEvent) {
   return event.category === "economic_calendar" || event.metadata?.source === "economic_calendar";
+}
+
+function isEngineOpportunityEvent(event: MacroEvent) {
+  return event.category === ENGINE_OPPORTUNITY_CATEGORY;
+}
+
+function severityFromScore(score: number | null): MacroDashboardOpportunity["severity"] {
+  const value = Number(score ?? 0);
+  if (value >= 90) return "extreme";
+  if (value >= 70) return "high";
+  if (value >= 40) return "medium";
+  return "low";
+}
+
+function metadataStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item)).filter(Boolean);
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  return [];
+}
+
+function toOpportunity(event: MacroEvent): MacroDashboardOpportunity {
+  const metadata = isRecord(event.metadata) ? event.metadata : {};
+  const conviction = Number(event.impact_score ?? metadata.score ?? 0);
+  const divergenceScore = Number(metadata.divergence_score ?? metadata.divergenceScore ?? conviction);
+
+  return {
+    id: event.id,
+    label: event.title,
+    status: "opportunity",
+    severity: severityFromScore(event.impact_score),
+    conviction,
+    divergenceScore,
+    coordinates: metadata.coordinates ?? null,
+    assetBasket: metadata.asset_basket ?? metadata.assetBasket ?? null,
+    catalysts: metadataStringArray(metadata.catalysts),
+    invalidation: stringValue(metadata.invalidation),
+    report: stringValue(metadata.report),
+    rawTelemetry: metadata.raw_telemetry ?? metadata.rawTelemetry ?? null,
+    situation: event.narrative,
+    updatedAt: event.created_at,
+    sources: event.source_url || event.source_title ? [{ title: event.source_title, url: event.source_url }] : []
+  };
 }
 
 function classifyCalendarTheme(event: MacroEvent) {
@@ -187,13 +237,17 @@ export async function GET(request: NextRequest) {
       .filter((event) => event.surprise)
       .sort((a, b) => b.event_date.localeCompare(a.event_date) || a.title.localeCompare(b.title))
       .slice(0, input.limit);
-    const narrativeSignals = (
-      await listMacroEvents(supabase, {
-        limit: 500,
-        country
-      })
-    )
-      .filter((event) => !isEconomicCalendarEvent(event))
+    const allEvents = await listMacroEvents(supabase, {
+      limit: 500,
+      country
+    });
+    const opportunities = allEvents
+      .filter(isEngineOpportunityEvent)
+      .sort((a, b) => Number(b.impact_score ?? 0) - Number(a.impact_score ?? 0) || b.event_date.localeCompare(a.event_date))
+      .slice(0, input.limit)
+      .map(toOpportunity);
+    const narrativeSignals = allEvents
+      .filter((event) => !isEconomicCalendarEvent(event) && !isEngineOpportunityEvent(event))
       .slice(0, input.limit);
 
     return NextResponse.json({
@@ -203,6 +257,7 @@ export async function GET(request: NextRequest) {
         latestSynced
       },
       regime: isRecord(regime.regime) ? regime.regime : null,
+      opportunities,
       upcomingCriticalEvents,
       realizedSurprises,
       narrativeSignals,
