@@ -23,7 +23,9 @@ const fredBundle = [
   { id: "WRESBAL", name: "Reserve Balances with Federal Reserve Banks", unit: "billions of dollars" },
   { id: "M2SL", name: "M2 Money Stock", unit: "billions of dollars" },
   { id: "BAMLH0A0HYM2", name: "US High Yield Option-Adjusted Spread", unit: "percent" },
-  { id: "VIXCLS", name: "CBOE Volatility Index", unit: "index" }
+  { id: "VIXCLS", name: "CBOE Volatility Index", unit: "index" },
+  { id: "INDPRO", name: "Industrial Production Total Index", unit: "index 2017=100" },
+  { id: "REAINTRATREARAT10Y", name: "10-Year Real Interest Rate", unit: "percent" }
 ];
 
 const requestSchema = z.object({

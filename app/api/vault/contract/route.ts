@@ -57,8 +57,10 @@ const contract = {
       {
         method: "GET",
         path: "/api/vault/dashboard-feed",
-        purpose: "Downstream-ready bundle with totals, regime, upcoming critical events, surprises, and narrative signals.",
-        query: ["days", "limit", "country"]
+        purpose: "Downstream-ready bundle with totals, regime, opportunities, upcoming critical events, surprises, and narrative signals.",
+        query: ["days", "limit", "country"],
+        notes:
+          "opportunities[] surfaces promoted engine reports (macro_events with category 'engine_opportunity') in a parse-ready shape: { id, label, status, severity, conviction, divergenceScore, coordinates, assetBasket, catalysts, invalidation, report, rawTelemetry, situation, sources }. To publish one, POST to /api/intelligence/candidates with seriesCode 'engine_opportunity' and the report under metadata.report, then promote the candidate."
       },
       {
         method: "GET",
