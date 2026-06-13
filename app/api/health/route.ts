@@ -124,7 +124,7 @@ async function probeConnectors() {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
 
-  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, acled, usgs, faaNas, treasury, cftc, fred, eia, forexFactory, fmp, gemini] = await Promise.all([
+  const [supabase, worldBank, eurostat, frankfurter, alternativeMe, gdelt, reliefweb, acled, usgs, faaNas, treasury, cftc, fred, eia, forexFactory, fmp, gemini, yahooFinance, binance, noaaSwpc, wikimedia] = await Promise.all([
     probeSupabase(),
     probeFetch("https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.CD?format=json&per_page=1"),
     probeFetch("https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/namq_10_gdp?format=JSON&lang=EN&freq=Q&s_adj=SCA&unit=CLV_PCH_PRE&na_item=B1GQ&geo=EU27_2020&sinceTimePeriod=2026-Q1"),
@@ -163,7 +163,21 @@ async function probeConnectors() {
       : Promise.resolve(missingConnector("FMP_API_KEY is not configured. Optional: a paid FMP key adds post-release actuals.")),
     geminiKey
       ? probeFetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(geminiKey)}`)
-      : Promise.resolve(missingConnector("GEMINI_API_KEY is not configured."))
+      : Promise.resolve(missingConnector("GEMINI_API_KEY is not configured.")),
+    // Yahoo and Binance can rate-limit or geo-block from some hosting regions,
+    // so a failing probe must not fail overall health.
+    probeFetch("https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?interval=1d&range=5d", 5000, {
+      warnOnFailure: true
+    }),
+    probeFetch("https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1", 5000, {
+      warnOnFailure: true
+    }),
+    probeFetch("https://services.swpc.noaa.gov/json/planetary_k_index_1m.json"),
+    probeFetch(
+      "https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/all-agents/Strait_of_Hormuz/daily/20240101/20240102",
+      5000,
+      { warnOnFailure: true }
+    )
   ]);
 
   return {
@@ -183,7 +197,11 @@ async function probeConnectors() {
     eia,
     forexFactory,
     fmp,
-    gemini
+    gemini,
+    yahooFinance,
+    binance,
+    noaaSwpc,
+    wikimedia
   };
 }
 
