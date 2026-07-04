@@ -3,6 +3,7 @@ import { POST as syncYahooFinance } from "@/app/api/sync/yahoo-finance/route";
 import { POST as syncBinance } from "@/app/api/sync/binance/route";
 import { POST as syncNoaaSpaceWeather } from "@/app/api/sync/noaa-space-weather/route";
 import { POST as syncWikimediaAttention } from "@/app/api/sync/wikimedia-attention/route";
+import { POST as syncCoinMetrics } from "@/app/api/sync/coinmetrics/route";
 import { assertVaultAuth } from "@/lib/auth";
 import { getEnv, getOptionalEnv } from "@/lib/env";
 
@@ -12,7 +13,8 @@ const connectors = [
   { name: "yahoo-finance", handler: syncYahooFinance },
   { name: "binance", handler: syncBinance },
   { name: "noaa-space-weather", handler: syncNoaaSpaceWeather },
-  { name: "wikimedia-attention", handler: syncWikimediaAttention }
+  { name: "wikimedia-attention", handler: syncWikimediaAttention },
+  { name: "coinmetrics", handler: syncCoinMetrics }
 ] as const;
 
 // Vercel Cron (see vercel.json) calls this with GET and
