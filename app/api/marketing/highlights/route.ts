@@ -1,0 +1,180 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { assertVaultAuth } from "@/lib/auth";
+import { jsonError } from "@/lib/api";
+import {
+  addIsoDays,
+  classifyMacroCriticalEvent,
+  isEconomicCalendarEvent,
+  isEngineOpportunityEvent,
+  isMacroCriticalRelease,
+  isRecord,
+  severityFromScore,
+  toDashboardEvent,
+  toOpportunity
+} from "@/lib/dashboard-feed";
+import { listMacroEvents } from "@/lib/intelligence-store";
+import { createSupabaseAdmin } from "@/lib/supabase-server";
+import { getLatestRegime } from "@/lib/vault-store";
+import type {
+  MacroDashboardEvent,
+  MacroDashboardOpportunity,
+  MarketingHighlight,
+  MarketingHighlightsResponse
+} from "@/types/vault";
+
+export const runtime = "nodejs";
+
+const PROJECT_NAME = "macro-vault";
+
+const querySchema = z.object({
+  days: z.coerce.number().int().min(1).max(90).default(7),
+  limit: z.coerce.number().int().min(1).max(50).default(12)
+});
+
+function opportunityHighlight(opportunity: MacroDashboardOpportunity): MarketingHighlight {
+  const metrics: MarketingHighlight["metrics"] = [
+    { label: "Conviction", value: String(Math.round(opportunity.conviction)) }
+  ];
+  if (opportunity.divergenceScore && opportunity.divergenceScore !== opportunity.conviction) {
+    metrics.push({ label: "Divergence", value: String(Math.round(opportunity.divergenceScore)) });
+  }
+
+  return {
+    id: `opportunity-${opportunity.id}`,
+    type: "alert",
+    headline: opportunity.label,
+    narrative: opportunity.situation,
+    severity: opportunity.severity,
+    metrics,
+    link: opportunity.sources[0]?.url ?? null,
+    tags: ["macro", "opportunity", ...opportunity.catalysts.slice(0, 3)]
+  };
+}
+
+function surpriseHighlight(event: MacroDashboardEvent): MarketingHighlight {
+  const metrics: MarketingHighlight["metrics"] = [];
+  if (event.actual) metrics.push({ label: "Actual", value: event.actual, delta: event.surprise?.label ?? null });
+  if (event.forecast) metrics.push({ label: "Forecast", value: event.forecast });
+  if (event.previous) metrics.push({ label: "Previous", value: event.previous });
+
+  return {
+    id: `surprise-${event.id}`,
+    type: "surprise",
+    headline: `${event.title}: ${event.surprise?.label ?? "released"}`,
+    narrative: event.narrative,
+    severity: severityFromScore(event.impact_score),
+    metrics,
+    link: event.source_url,
+    tags: ["macro", event.theme.toLowerCase(), ...(event.country_code ? [event.country_code.toLowerCase()] : [])]
+  };
+}
+
+function upcomingEventHighlight(event: MacroDashboardEvent): MarketingHighlight {
+  const metrics: MarketingHighlight["metrics"] = [{ label: "Date", value: event.event_date }];
+  if (event.forecast) metrics.push({ label: "Forecast", value: event.forecast });
+  if (event.previous) metrics.push({ label: "Previous", value: event.previous });
+
+  const label = classifyMacroCriticalEvent(event) ?? event.theme;
+
+  return {
+    id: `event-${event.id}`,
+    type: "event",
+    headline: `${label} ahead: ${event.title} (${event.event_date})`,
+    narrative: event.narrative,
+    severity: severityFromScore(event.impact_score),
+    metrics,
+    link: event.source_url,
+    tags: ["macro", "calendar", event.theme.toLowerCase()],
+    expiresAt: event.event_date
+  };
+}
+
+function regimeHighlight(regime: Record<string, unknown>): MarketingHighlight | null {
+  const name =
+    typeof regime.name === "string"
+      ? regime.name
+      : typeof regime.label === "string"
+        ? regime.label
+        : typeof regime.regime === "string"
+          ? regime.regime
+          : null;
+  if (!name) return null;
+
+  const narrative =
+    typeof regime.summary === "string"
+      ? regime.summary
+      : typeof regime.narrative === "string"
+        ? regime.narrative
+        : typeof regime.description === "string"
+          ? regime.description
+          : `The vault's AI regime read currently sits at "${name}".`;
+  const confidence = Number(regime.confidence ?? regime.score ?? NaN);
+
+  return {
+    id: `regime-${name.toLowerCase().replace(/\s+/g, "-")}`,
+    type: "stat",
+    headline: `Macro regime: ${name}`,
+    narrative,
+    severity: "medium",
+    metrics: Number.isFinite(confidence) ? [{ label: "Confidence", value: String(Math.round(confidence)) }] : [],
+    tags: ["macro", "regime"]
+  };
+}
+
+export async function GET(request: NextRequest) {
+  const authError = assertVaultAuth(request);
+  if (authError) return authError;
+
+  try {
+    const input = querySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
+    const supabase = createSupabaseAdmin();
+    const todayIso = new Date().toISOString().slice(0, 10);
+
+    const [regimeResult, allEvents] = await Promise.all([
+      getLatestRegime(supabase),
+      listMacroEvents(supabase, { limit: 500 })
+    ]);
+
+    const calendarEvents = allEvents.filter(isEconomicCalendarEvent).map(toDashboardEvent);
+    const recentStart = addIsoDays(todayIso, -input.days);
+    const upcomingEnd = addIsoDays(todayIso, input.days);
+
+    const highlights: MarketingHighlight[] = [];
+
+    const regime = isRecord(regimeResult.regime) ? regimeHighlight(regimeResult.regime) : null;
+    if (regime) highlights.push(regime);
+
+    allEvents
+      .filter(isEngineOpportunityEvent)
+      .filter((event) => event.event_date >= recentStart)
+      .sort((a, b) => Number(b.impact_score ?? 0) - Number(a.impact_score ?? 0))
+      .slice(0, input.limit)
+      .map(toOpportunity)
+      .forEach((opportunity) => highlights.push(opportunityHighlight(opportunity)));
+
+    calendarEvents
+      .filter((event) => event.surprise && event.event_date >= recentStart && event.event_date <= todayIso)
+      .filter(isMacroCriticalRelease)
+      .sort((a, b) => b.event_date.localeCompare(a.event_date))
+      .slice(0, input.limit)
+      .forEach((event) => highlights.push(surpriseHighlight(event)));
+
+    calendarEvents
+      .filter((event) => event.event_date > todayIso && event.event_date <= upcomingEnd)
+      .filter(isMacroCriticalRelease)
+      .sort((a, b) => a.event_date.localeCompare(b.event_date))
+      .slice(0, input.limit)
+      .forEach((event) => highlights.push(upcomingEventHighlight(event)));
+
+    const response: MarketingHighlightsResponse = {
+      project: PROJECT_NAME,
+      generatedAt: new Date().toISOString(),
+      highlights: highlights.slice(0, input.limit)
+    };
+
+    return NextResponse.json(response);
+  } catch (error) {
+    return jsonError(error);
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "project": "macro-vault",
+  "generatedAt": "2026-07-08T06:00:00.000Z",
+  "highlights": [
+    {
+      "id": "fixture-mvrv-alert",
+      "type": "alert",
+      "headline": "BTC MVRV crosses 3.2 — historically frothy territory",
+      "narrative": "Bitcoin's market-value-to-realized-value ratio pushed above 3.2 for the first time since the 2021 cycle top. Past readings above 3 preceded 30%+ drawdowns within 90 days in 3 of 4 cases.",
+      "severity": "high",
+      "metrics": [
+        { "label": "MVRV", "value": "3.21", "delta": "+0.42 / 30d" },
+        { "label": "90d after >3", "value": "-31%", "delta": "median, past cycles" }
+      ],
+      "sparkline": [
+        { "t": "2026-05-10", "v": 2.61 },
+        { "t": "2026-05-20", "v": 2.72 },
+        { "t": "2026-05-30", "v": 2.68 },
+        { "t": "2026-06-09", "v": 2.85 },
+        { "t": "2026-06-19", "v": 2.98 },
+        { "t": "2026-06-29", "v": 3.09 },
+        { "t": "2026-07-07", "v": 3.21 }
+      ],
+      "link": "https://example.com/vault/mvrv",
+      "tags": ["bitcoin", "onchain"]
+    },
+    {
+      "id": "fixture-cpi-surprise",
+      "type": "surprise",
+      "headline": "US Core CPI: +0.2pp above forecast",
+      "narrative": "Core CPI printed 3.4% year-over-year against a 3.2% consensus — the largest upside surprise in eight months, complicating the September cut narrative.",
+      "severity": "extreme",
+      "metrics": [
+        { "label": "Actual", "value": "3.4%", "delta": "+0.2pp vs forecast" },
+        { "label": "Forecast", "value": "3.2%" },
+        { "label": "Previous", "value": "3.3%" }
+      ],
+      "tags": ["macro", "inflation", "us"]
+    },
+    {
+      "id": "fixture-regime-stat",
+      "type": "stat",
+      "headline": "Macro regime: Late-cycle expansion",
+      "narrative": "The vault's synthesis engine keeps its late-cycle read for a sixth straight week: growth cooling, inflation sticky, risk appetite narrowing to quality.",
+      "severity": "medium",
+      "metrics": [
+        { "label": "Confidence", "value": "78" },
+        { "label": "Weeks in regime", "value": "6" }
+      ],
+      "tags": ["macro", "regime"]
+    },
+    {
+      "id": "fixture-nfp-upcoming",
+      "type": "event",
+      "headline": "NFP ahead: July payrolls land Friday",
+      "narrative": "Consensus looks for 140k jobs. A sub-100k print would be the softest since 2024 and put a July cut back on the table.",
+      "severity": "medium",
+      "metrics": [
+        { "label": "Date", "value": "2026-07-11" },
+        { "label": "Forecast", "value": "140k" },
+        { "label": "Previous", "value": "152k" }
+      ],
+      "tags": ["macro", "calendar", "labor"],
+      "expiresAt": "2099-12-31"
+    },
+    {
+      "id": "fixture-low-noise",
+      "type": "stat",
+      "headline": "Vault crossed 2.1M stored observations",
+      "narrative": "Housekeeping milestone; below the default posting threshold on purpose.",
+      "severity": "low",
+      "metrics": [{ "label": "Observations", "value": "2.1M" }],
+      "tags": ["meta"]
+    }
+  ]
+}

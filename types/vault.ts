@@ -248,3 +248,35 @@ export type IntelligenceCandidatesResponse = {
   count: number;
   message?: string;
 };
+
+// Marketing highlights contract (docs/marketing-contract.md). Any project can
+// expose GET /api/marketing/highlights returning MarketingHighlightsResponse;
+// the standalone marketing engine (services/marketing-engine) consumes it.
+export type MarketingHighlightType = "alert" | "stat" | "surprise" | "event" | "milestone";
+
+export type MarketingHighlightSeverity = "low" | "medium" | "high" | "extreme";
+
+export type MarketingHighlightMetric = {
+  label: string;
+  value: string;
+  delta?: string | null;
+};
+
+export type MarketingHighlight = {
+  id: string;
+  type: MarketingHighlightType;
+  headline: string;
+  narrative: string;
+  severity: MarketingHighlightSeverity;
+  metrics: MarketingHighlightMetric[];
+  sparkline?: Array<{ t: string; v: number }>;
+  link?: string | null;
+  tags: string[];
+  expiresAt?: string | null;
+};
+
+export type MarketingHighlightsResponse = {
+  project: string;
+  generatedAt: string;
+  highlights: MarketingHighlight[];
+};

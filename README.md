@@ -185,6 +185,15 @@ Future projects should connect with `MACRO_VAULT_URL` and
 new reusable signals through the intelligence candidate queue instead of direct
 Supabase browser writes.
 
+## Marketing Layer
+
+`GET /api/marketing/highlights` exposes the vault's most story-worthy data
+(opportunities, surprises, regime, upcoming releases) in the cross-project
+contract described in `docs/marketing-contract.md`. The standalone marketing
+engine in `services/marketing-engine/` (its own Vercel project) consumes that
+feed, renders share cards, writes per-channel copy, and queues everything for
+human review before posting — see its README.
+
 ## First Vercel Smoke Deploy
 
 Deploy when local checks pass and the core vault API is stable enough to test in
