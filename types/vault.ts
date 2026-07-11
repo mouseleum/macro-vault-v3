@@ -262,6 +262,14 @@ export type MarketingHighlightMetric = {
   delta?: string | null;
 };
 
+// Optional media attachments (music/creative projects): square cover art,
+// waveform amplitudes (0–1) drawn on the card, streaming links for the copy.
+export type MarketingHighlightMedia = {
+  coverImageUrl?: string | null;
+  waveform?: number[];
+  links?: Array<{ label: string; url: string }>;
+};
+
 export type MarketingHighlight = {
   id: string;
   type: MarketingHighlightType;
@@ -270,6 +278,7 @@ export type MarketingHighlight = {
   severity: MarketingHighlightSeverity;
   metrics: MarketingHighlightMetric[];
   sparkline?: Array<{ t: string; v: number }>;
+  media?: MarketingHighlightMedia | null;
   link?: string | null;
   tags: string[];
   expiresAt?: string | null;

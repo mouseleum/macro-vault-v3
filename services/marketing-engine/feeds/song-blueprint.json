@@ -1,0 +1,41 @@
+{
+  "project": "song-blueprint",
+  "generatedAt": "2026-07-11T00:00:00.000Z",
+  "highlights": [
+    {
+      "id": "EDIT-ME-blueprint-example",
+      "type": "milestone",
+      "headline": "New blueprint finished: \"EDIT ME\"",
+      "narrative": "EDIT ME: what the blueprint is (genre, structure, mood) and one interesting choice it makes. Factual; the tool-maker voice is applied by the engine.",
+      "severity": "high",
+      "metrics": [
+        {
+          "label": "Sections",
+          "value": "7"
+        },
+        {
+          "label": "BPM",
+          "value": "124"
+        }
+      ],
+      "link": "https://song-blueprint.vercel.app",
+      "tags": [
+        "songwriting",
+        "blueprint"
+      ]
+    },
+    {
+      "id": "EDIT-ME-feature-update",
+      "type": "event",
+      "headline": "Song Blueprint update: EDIT ME feature",
+      "narrative": "EDIT ME: one shipped improvement, described concretely \u2014 what a user can now do that they couldn't before.",
+      "severity": "medium",
+      "metrics": [],
+      "link": "https://song-blueprint.vercel.app",
+      "tags": [
+        "update",
+        "songwriting"
+      ]
+    }
+  ]
+}

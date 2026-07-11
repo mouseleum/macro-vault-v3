@@ -14,6 +14,7 @@ create table if not exists public.marketing_drafts (
     check (severity in ('low', 'medium', 'high', 'extreme')),
   metrics jsonb not null default '[]',
   sparkline jsonb,
+  media jsonb,
   link text,
   tags text[] not null default '{}',
   copy jsonb not null default '{}',
@@ -41,6 +42,9 @@ create table if not exists public.marketing_posts (
 );
 
 create index if not exists marketing_posts_draft_idx on public.marketing_posts (draft_id, posted_at desc);
+
+-- Safe to re-run on deployments created before the media column existed.
+alter table public.marketing_drafts add column if not exists media jsonb;
 
 -- The engine talks to Supabase with the service-role key only; keep RLS on so
 -- anon/authenticated roles have no access.

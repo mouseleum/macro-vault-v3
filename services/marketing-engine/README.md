@@ -77,10 +77,24 @@ Set `GEMINI_API_KEY` locally to exercise real copywriting against the fixture.
 ## Adding a project
 
 1. Implement the highlights contract (`../../docs/marketing-contract.md`) —
-   one authenticated JSON endpoint, or a static `highlights.json`.
+   one authenticated JSON endpoint, a static `highlights.json`, **or a
+   repo-local feed file** in `feeds/` (for manual marketing with no endpoint:
+   edit JSON → commit → deploy; register it in `feeds/index.ts`).
 2. Add a `ProjectProfile` to `lib/registry.ts` (brand, voice, channels,
-   thresholds) and set its feed env vars.
+   thresholds) and set its feed env vars and/or `feedFile`.
 3. Done — the next cron run picks it up.
+
+## Music projects
+
+Two music profiles ship enabled with manual feed files: `artist` (your
+releases — **edit the EDIT-ME brand/handle/voice in `lib/registry.ts` and the
+starter content in `feeds/artist.json`**) and `song-blueprint`
+(`feeds/song-blueprint.json`). Music highlights use the optional `media`
+contract field: `coverImageUrl` renders square art on the card (a branded
+gradient placeholder is used when null), `waveform` (0–1 amplitudes) draws a
+waveform strip instead of the sparkline, and `links` (Spotify/Bandcamp/…)
+are woven into the generated copy. Release `milestone` highlights drop the
+severity chip on the card.
 
 ## API
 

@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { assertVaultAuth } from "@/lib/auth";
-import { jsonError } from "@/lib/api";
+import { jsonError, todayIsoDate } from "@/lib/api";
 import {
   addIsoDays,
   classifyMacroCriticalEvent,
   isEconomicCalendarEvent,
   isEngineOpportunityEvent,
-  isMacroCriticalRelease,
   isRecord,
   severityFromScore,
   toDashboardEvent,
@@ -31,6 +30,44 @@ const querySchema = z.object({
   days: z.coerce.number().int().min(1).max(90).default(7),
   limit: z.coerce.number().int().min(1).max(50).default(12)
 });
+
+function clampText(value: string, limit: number) {
+  const trimmed = value.trim();
+  if (trimmed.length <= limit) return trimmed;
+  return `${trimmed.slice(0, limit - 1).trimEnd()}…`;
+}
+
+function validUrlOrNull(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    new URL(value);
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+// The marketing contract (docs/marketing-contract.md) bounds every field;
+// vault data (candidate narratives up to 4000 chars, 220-char titles,
+// free-form catalyst tags) can legitimately exceed them, so clamp at the
+// boundary instead of letting the consumer reject the highlight.
+function clampToContract(highlight: MarketingHighlight): MarketingHighlight {
+  return {
+    ...highlight,
+    headline: clampText(highlight.headline, 200),
+    narrative: clampText(highlight.narrative, 2000),
+    metrics: highlight.metrics.slice(0, 8).map((metric) => ({
+      label: clampText(metric.label, 40),
+      value: clampText(metric.value, 40),
+      ...(metric.delta ? { delta: clampText(metric.delta, 60) } : {})
+    })),
+    tags: highlight.tags
+      .filter((tag) => tag.trim().length > 0)
+      .map((tag) => clampText(tag, 40))
+      .slice(0, 12),
+    link: validUrlOrNull(highlight.link)
+  };
+}
 
 function opportunityHighlight(opportunity: MacroDashboardOpportunity): MarketingHighlight {
   const metrics: MarketingHighlight["metrics"] = [
@@ -101,14 +138,18 @@ function regimeHighlight(regime: Record<string, unknown>): MarketingHighlight | 
           : null;
   if (!name) return null;
 
+  // The regime writer (app/api/regime/route.ts) stores its analysis under
+  // "reasoning"; the other keys cover alternative producers.
   const narrative =
-    typeof regime.summary === "string"
-      ? regime.summary
-      : typeof regime.narrative === "string"
-        ? regime.narrative
-        : typeof regime.description === "string"
-          ? regime.description
-          : `The vault's AI regime read currently sits at "${name}".`;
+    typeof regime.reasoning === "string"
+      ? regime.reasoning
+      : typeof regime.summary === "string"
+        ? regime.summary
+        : typeof regime.narrative === "string"
+          ? regime.narrative
+          : typeof regime.description === "string"
+            ? regime.description
+            : `The vault's AI regime read currently sits at "${name}".`;
   const confidence = Number(regime.confidence ?? regime.score ?? NaN);
 
   return {
@@ -129,40 +170,41 @@ export async function GET(request: NextRequest) {
   try {
     const input = querySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
     const supabase = createSupabaseAdmin();
-    const todayIso = new Date().toISOString().slice(0, 10);
-
-    const [regimeResult, allEvents] = await Promise.all([
-      getLatestRegime(supabase),
-      listMacroEvents(supabase, { limit: 500 })
-    ]);
-
-    const calendarEvents = allEvents.filter(isEconomicCalendarEvent).map(toDashboardEvent);
+    const todayIso = todayIsoDate();
     const recentStart = addIsoDays(todayIso, -input.days);
     const upcomingEnd = addIsoDays(todayIso, input.days);
+
+    const [regimeResult, windowEvents] = await Promise.all([
+      getLatestRegime(supabase),
+      listMacroEvents(supabase, { limit: 500, from: recentStart, to: upcomingEnd })
+    ]);
+
+    const calendarEvents = windowEvents.filter(isEconomicCalendarEvent).map(toDashboardEvent);
 
     const highlights: MarketingHighlight[] = [];
 
     const regime = isRecord(regimeResult.regime) ? regimeHighlight(regimeResult.regime) : null;
     if (regime) highlights.push(regime);
 
-    allEvents
+    windowEvents
       .filter(isEngineOpportunityEvent)
-      .filter((event) => event.event_date >= recentStart)
       .sort((a, b) => Number(b.impact_score ?? 0) - Number(a.impact_score ?? 0))
       .slice(0, input.limit)
       .map(toOpportunity)
       .forEach((opportunity) => highlights.push(opportunityHighlight(opportunity)));
 
     calendarEvents
-      .filter((event) => event.surprise && event.event_date >= recentStart && event.event_date <= todayIso)
-      .filter(isMacroCriticalRelease)
+      .filter((event) => event.surprise && event.event_date <= todayIso)
+      .filter((event) => event.is_macro_critical)
       .sort((a, b) => b.event_date.localeCompare(a.event_date))
       .slice(0, input.limit)
       .forEach((event) => highlights.push(surpriseHighlight(event)));
 
+    // >= today so a release printing later today still gets highlighted; the
+    // surprise filter above already owns today's events once actuals exist.
     calendarEvents
-      .filter((event) => event.event_date > todayIso && event.event_date <= upcomingEnd)
-      .filter(isMacroCriticalRelease)
+      .filter((event) => event.event_date >= todayIso && !event.surprise)
+      .filter((event) => event.is_macro_critical)
       .sort((a, b) => a.event_date.localeCompare(b.event_date))
       .slice(0, input.limit)
       .forEach((event) => highlights.push(upcomingEventHighlight(event)));
@@ -170,7 +212,7 @@ export async function GET(request: NextRequest) {
     const response: MarketingHighlightsResponse = {
       project: PROJECT_NAME,
       generatedAt: new Date().toISOString(),
-      highlights: highlights.slice(0, input.limit)
+      highlights: highlights.slice(0, input.limit).map(clampToContract)
     };
 
     return NextResponse.json(response);

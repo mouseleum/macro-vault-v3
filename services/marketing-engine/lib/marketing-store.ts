@@ -31,15 +31,24 @@ export type DraftFilters = {
 export interface MarketingStore {
   listDrafts(filters?: DraftFilters): Promise<MarketingDraft[]>;
   getDraft(id: string): Promise<MarketingDraft | null>;
-  createDraft(input: DraftInput): Promise<MarketingDraft>;
+  // Returns null when the content hash already exists (duplicate → skip).
+  createDraft(input: DraftInput): Promise<MarketingDraft | null>;
   updateDraft(
     id: string,
     patch: Partial<Pick<MarketingDraft, "copy" | "status" | "reviewed_at">>
   ): Promise<MarketingDraft>;
+  // Atomically claims a pending/approved draft by setting it to "published";
+  // returns null when the draft is already claimed, rejected, or missing —
+  // the caller must not post to any channel without a successful claim.
+  claimDraftForPublish(id: string): Promise<MarketingDraft | null>;
   listContentHashes(project: string): Promise<Set<string>>;
   countDraftsSince(project: string, sinceIso: string): Promise<number>;
   createPosts(posts: PostInput[]): Promise<MarketingPost[]>;
   listPosts(draftId: string): Promise<MarketingPost[]>;
+}
+
+function isUniqueViolation(error: { code?: string; message?: string }) {
+  return error.code === "23505" || Boolean(error.message?.includes("duplicate key"));
 }
 
 class SupabaseMarketingStore implements MarketingStore {
@@ -67,7 +76,10 @@ class SupabaseMarketingStore implements MarketingStore {
 
   async createDraft(input: DraftInput) {
     const { data, error } = await this.supabase.from("marketing_drafts").insert(input).select("*").single();
-    if (error) throw error;
+    if (error) {
+      if (isUniqueViolation(error)) return null;
+      throw error;
+    }
     return data as MarketingDraft;
   }
 
@@ -80,6 +92,17 @@ class SupabaseMarketingStore implements MarketingStore {
       .single();
     if (error) throw error;
     return data as MarketingDraft;
+  }
+
+  async claimDraftForPublish(id: string) {
+    const { data, error } = await this.supabase
+      .from("marketing_drafts")
+      .update({ status: "published", reviewed_at: new Date().toISOString() })
+      .eq("id", id)
+      .in("status", ["pending", "approved"])
+      .select("*");
+    if (error) throw error;
+    return (data?.[0] ?? null) as MarketingDraft | null;
   }
 
   async listContentHashes(project: string) {
@@ -148,6 +171,8 @@ class MemoryMarketingStore implements MarketingStore {
   }
 
   async createDraft(input: DraftInput) {
+    const state = memoryState();
+    if (state.drafts.some((draft) => draft.content_hash === input.content_hash)) return null;
     const draft: MarketingDraft = {
       ...input,
       id: crypto.randomUUID(),
@@ -155,7 +180,7 @@ class MemoryMarketingStore implements MarketingStore {
       created_at: new Date().toISOString(),
       reviewed_at: null
     };
-    memoryState().drafts.unshift(draft);
+    state.drafts.unshift(draft);
     return draft;
   }
 
@@ -164,6 +189,14 @@ class MemoryMarketingStore implements MarketingStore {
     const existing = state.drafts.find((draft) => draft.id === id);
     if (!existing) throw new Error("Draft not found");
     Object.assign(existing, patch);
+    return existing;
+  }
+
+  async claimDraftForPublish(id: string) {
+    const existing = memoryState().drafts.find((draft) => draft.id === id);
+    if (!existing || (existing.status !== "pending" && existing.status !== "approved")) return null;
+    existing.status = "published";
+    existing.reviewed_at = new Date().toISOString();
     return existing;
   }
 
