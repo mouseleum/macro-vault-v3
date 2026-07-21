@@ -4,6 +4,7 @@ import { POST as syncBinance } from "@/app/api/sync/binance/route";
 import { POST as syncNoaaSpaceWeather } from "@/app/api/sync/noaa-space-weather/route";
 import { POST as syncWikimediaAttention } from "@/app/api/sync/wikimedia-attention/route";
 import { POST as syncCoinMetrics } from "@/app/api/sync/coinmetrics/route";
+import { POST as syncImf } from "@/app/api/sync/imf/route";
 import { assertVaultAuth } from "@/lib/auth";
 import { getEnv, getOptionalEnv } from "@/lib/env";
 
@@ -14,7 +15,8 @@ const connectors = [
   { name: "binance", handler: syncBinance },
   { name: "noaa-space-weather", handler: syncNoaaSpaceWeather },
   { name: "wikimedia-attention", handler: syncWikimediaAttention },
-  { name: "coinmetrics", handler: syncCoinMetrics }
+  { name: "coinmetrics", handler: syncCoinMetrics },
+  { name: "imf", handler: syncImf }
 ] as const;
 
 // Vercel Cron (see vercel.json) calls this with GET and
