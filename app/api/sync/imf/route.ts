@@ -11,9 +11,10 @@ export const runtime = "nodejs";
 // WEO consensus baselines (growth, inflation, current account) to measure
 // shocks against, and monthly official FX reserves — the classic early-warning
 // series for EM stress, devaluation risk, and capital flight (pairs with the
-// stablecoin-supply proxy from the coinmetrics connector). Both IMF APIs are
-// free and keyless. The legacy dataservices.imf.org SDMX host is dead; this
-// uses the DataMapper API and the new api.imf.org SDMX 2.1 endpoint.
+// stablecoin-supply proxy from the coinmetrics connector). Both datasets come
+// from the new api.imf.org SDMX 2.1 endpoint, free and keyless — the legacy
+// dataservices.imf.org host is dead, and the DataMapper API 403s Vercel's
+// datacenter IPs even though it works from residential ones.
 const weoCountries = ["USA", "CHN", "IND", "TUR", "EGY", "PAK", "ARG", "SAU"];
 // Pakistan does not report IRFCL; the US is the reserve-currency issuer.
 const reservesCountries = ["CHN", "IND", "TUR", "EGY", "ARG", "SAU"];
@@ -34,7 +35,6 @@ const requestSchema = z.object({
   forecastHorizonYears: z.number().int().min(0).max(6).default(1)
 });
 
-const DATAMAPPER_BASE = "https://www.imf.org/external/datamapper/api/v1";
 const SDMX_BASE = "https://api.imf.org/external/sdmx/2.1";
 const RESERVES_INDICATOR = "IRFCLDT1_IRFCL65_USD";
 const retryableStatuses = new Set([408, 429, 500, 502, 503, 504]);
@@ -65,52 +65,50 @@ async function fetchWithRetry(url: string, label: string) {
   return response;
 }
 
-// DataMapper ignores country/period path filters and returns every country's
-// full history (plus projections), so fetch once per indicator and filter here.
-async function fetchWeoIndicator(indicatorCode: string) {
-  const response = await fetchWithRetry(`${DATAMAPPER_BASE}/${encodeURIComponent(indicatorCode)}`, "DataMapper");
-  const payload = await response.json();
-  const byCountry = payload?.values?.[indicatorCode];
-  if (!byCountry || typeof byCountry !== "object") {
-    throw new Error(`IMF DataMapper returned no values for ${indicatorCode}`);
-  }
-  return byCountry as Record<string, Record<string, number>>;
-}
+type SdmxSeries = {
+  country: string;
+  indicator: string;
+  sector: string;
+  rows: { date: string; value: number }[];
+};
 
-function weoRows(
-  yearValues: Record<string, number>,
-  observationStart: string,
-  maxYear: number
-) {
-  const startYear = Number(observationStart.slice(0, 4));
-  return Object.entries(yearValues)
-    .map(([year, value]) => ({ year: Number(year), value: Number(value) }))
-    .filter((row) => Number.isFinite(row.value) && row.year >= startYear && row.year <= maxYear)
-    .map((row) => ({ date: `${row.year}-01-01`, value: row.value }));
-}
-
-type ReservesSeries = { country: string; sector: string; rows: { date: string; value: number }[] };
-
-// The SDMX endpoint only offers XML for this dataflow; the structure-specific
+// The SDMX endpoint only offers XML for these dataflows; the structure-specific
 // format is stable enough to parse with regexes (attributes on Series/Obs tags).
-function parseReservesXml(xml: string): ReservesSeries[] {
-  const series: ReservesSeries[] = [];
+// Annual periods look like TIME_PERIOD="2026", monthly like "2026-M06".
+function parseSdmxSeries(xml: string): SdmxSeries[] {
+  const series: SdmxSeries[] = [];
   const seriesPattern = /<Series ([^>]*)>([\s\S]*?)<\/Series>/g;
 
   for (const match of xml.matchAll(seriesPattern)) {
     const [, attrs, body] = match;
     const country = attrs.match(/COUNTRY="(\w+)"/)?.[1];
+    const indicator = attrs.match(/INDICATOR="([\w.]+)"/)?.[1] ?? "";
     const sector = attrs.match(/SECTOR="(\w+)"/)?.[1] ?? "";
     if (!country) continue;
 
-    const rows = [...body.matchAll(/TIME_PERIOD="(\d{4})-M(\d{2})"[^>]*OBS_VALUE="([^"]+)"/g)]
-      .map(([, year, month, value]) => ({ date: `${year}-${month}-01`, value: Number(value) }))
+    const rows = [...body.matchAll(/TIME_PERIOD="(\d{4})(?:-M(\d{2}))?"[^>]*OBS_VALUE="([^"]+)"/g)]
+      .map(([, year, month, value]) => ({ date: `${year}-${month ?? "01"}-01`, value: Number(value) }))
       .filter((row) => Number.isFinite(row.value));
 
-    series.push({ country, sector, rows });
+    series.push({ country, indicator, sector, rows });
   }
 
   return series;
+}
+
+// One batched request covers every country x indicator pair; WEO periods are
+// annual and include ~5y projections, capped later via maxYear.
+async function fetchWeo(countries: string[], indicators: string[], observationStart: string) {
+  const key = `${countries.join("+")}.${indicators.join("+")}.A`;
+  const response = await fetchWithRetry(
+    `${SDMX_BASE}/data/WEO/${key}?startPeriod=${observationStart.slice(0, 4)}`,
+    "WEO"
+  );
+  const byKey = new Map<string, SdmxSeries>();
+  for (const item of parseSdmxSeries(await response.text())) {
+    byKey.set(`${item.country}.${item.indicator}`, item);
+  }
+  return byKey;
 }
 
 async function fetchReserves(countries: string[], observationStart: string) {
@@ -120,11 +118,11 @@ async function fetchReserves(countries: string[], observationStart: string) {
     `${SDMX_BASE}/data/IRFCL/${key}?startPeriod=${startPeriod}`,
     "IRFCL"
   );
-  const allSeries = parseReservesXml(await response.text());
+  const allSeries = parseSdmxSeries(await response.text());
 
   // Some countries publish under more than one sector; keep the monetary
   // authorities series (S1XS1311) when present, else the longest one.
-  const byCountry = new Map<string, ReservesSeries>();
+  const byCountry = new Map<string, SdmxSeries>();
   for (const item of allSeries) {
     const existing = byCountry.get(item.country);
     const preferNew =
@@ -201,41 +199,17 @@ export async function POST(request: NextRequest) {
 
     if (input.parts.includes("weo")) {
       const maxYear = new Date().getUTCFullYear() + input.forecastHorizonYears;
+      let weoByKey: Map<string, SdmxSeries> | null = null;
 
-      for (const indicator of weoIndicators) {
-        let byCountry: Record<string, Record<string, number>>;
-        try {
-          byCountry = await fetchWeoIndicator(indicator.code);
-        } catch (error) {
+      try {
+        weoByKey = await fetchWeo(
+          weoList,
+          weoIndicators.map((indicator) => indicator.code),
+          input.observationStart
+        );
+      } catch (error) {
+        for (const indicator of weoIndicators) {
           for (const country of weoList) {
-            failed.push({
-              seriesCode: `IMF_${country}_${indicator.code}`,
-              error: error instanceof Error ? error.message : "Unknown IMF sync error"
-            });
-          }
-          continue;
-        }
-
-        for (const country of weoList) {
-          try {
-            const yearValues = byCountry[country];
-            if (!yearValues) {
-              failed.push({ seriesCode: `IMF_${country}_${indicator.code}`, error: "Country missing from WEO data" });
-              continue;
-            }
-            await upsertSeries(
-              `IMF_${country}_${indicator.code}`,
-              `${indicator.name} (${country})`,
-              country,
-              indicator.unit,
-              {
-                indicatorCode: indicator.code,
-                source: "IMF DataMapper API (WEO)",
-                forecastHorizonYears: input.forecastHorizonYears
-              },
-              weoRows(yearValues, input.observationStart, maxYear)
-            );
-          } catch (error) {
             failed.push({
               seriesCode: `IMF_${country}_${indicator.code}`,
               error: error instanceof Error ? error.message : "Unknown IMF sync error"
@@ -243,10 +217,42 @@ export async function POST(request: NextRequest) {
           }
         }
       }
+
+      if (weoByKey) {
+        for (const indicator of weoIndicators) {
+          for (const country of weoList) {
+            try {
+              const item = weoByKey.get(`${country}.${indicator.code}`);
+              if (!item || item.rows.length === 0) {
+                failed.push({ seriesCode: `IMF_${country}_${indicator.code}`, error: "Country missing from WEO data" });
+                continue;
+              }
+              const rows = item.rows.filter((row) => Number(row.date.slice(0, 4)) <= maxYear);
+              await upsertSeries(
+                `IMF_${country}_${indicator.code}`,
+                `${indicator.name} (${country})`,
+                country,
+                indicator.unit,
+                {
+                  indicatorCode: indicator.code,
+                  source: "IMF SDMX 2.1 API (WEO)",
+                  forecastHorizonYears: input.forecastHorizonYears
+                },
+                rows
+              );
+            } catch (error) {
+              failed.push({
+                seriesCode: `IMF_${country}_${indicator.code}`,
+                error: error instanceof Error ? error.message : "Unknown IMF sync error"
+              });
+            }
+          }
+        }
+      }
     }
 
     if (input.parts.includes("reserves")) {
-      let reservesByCountry: Map<string, ReservesSeries> | null = null;
+      let reservesByCountry: Map<string, SdmxSeries> | null = null;
       try {
         reservesByCountry = await fetchReserves(reservesList, input.observationStart);
       } catch (error) {
