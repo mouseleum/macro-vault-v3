@@ -7,7 +7,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "tsc --noEmit -p tsconfig.lint.json"
+    "lint": "tsc --noEmit -p tsconfig.lint.json",
+    "lint:engine": "npm --prefix services/marketing-engine run lint",
+    "lint:all": "npm run lint && npm run lint:engine"
   },
   "dependencies": {
     "@google/genai": "^1.50.1",

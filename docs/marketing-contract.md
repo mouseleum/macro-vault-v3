@@ -16,6 +16,12 @@ The path is conventional, not required — the engine's registry stores the full
 so a static `highlights.json` behind a CDN works too (e.g. for frontend-only projects
 like visual-alarmist).
 
+Projects with no endpoint at all (manual marketing: releases, announcements) can
+instead ship a **repo-local feed file** in `services/marketing-engine/feeds/` and
+reference it from their registry profile via `feedFile` — edit the JSON, commit,
+deploy. The `project` field must match the profile slug; the engine rejects
+mismatched feeds to catch mis-wired env vars.
+
 ## Response shape
 
 ```jsonc
@@ -37,11 +43,23 @@ like visual-alarmist).
       ],
       "link": "https://…",               // optional CTA URL included in the post copy
       "tags": ["bitcoin", "onchain"],    // used for hashtags and channel routing
-      "expiresAt": "2026-07-10"          // optional; engine drops the highlight after this date
+      "expiresAt": "2026-07-10",         // optional; engine drops the highlight after this date
+      "media": {                          // optional; music/creative projects
+        "coverImageUrl": "https://…",    //   square art rendered on the card
+        "waveform": [0.1, 0.6, 0.8],     //   0–1 amplitudes (≤200) → waveform strip
+        "links": [                        //   streaming/pre-save links for the copy
+          { "label": "Spotify", "url": "https://…" }
+        ]
+      }
     }
   ]
 }
 ```
+
+Field limits (the engine validates them): headline ≤ 200, narrative ≤ 2000,
+metric label/value ≤ 40, delta ≤ 60, ≤ 8 metrics, tag ≤ 40 chars / ≤ 12 tags,
+`link` must be a valid URL. A highlight violating a limit is **dropped
+individually** (and counted in the cron result) — it does not fail the feed.
 
 Reference TypeScript types: `MarketingHighlight` / `MarketingHighlightsResponse` in
 `types/vault.ts`.

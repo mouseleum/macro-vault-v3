@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { GoogleGenAI, Type } from "@google/genai";
-import { getOptionalEnv } from "./env";
+import { Type } from "@google/genai";
+import { todayIsoDate } from "./api";
+import { createGeminiClient, getGeminiModel } from "./gemini";
 import { meetsSeverity, type ProjectProfile } from "./registry";
 import type { MarketingHighlight, MarketingHighlightSeverity, MarketingHighlightType } from "@/types/marketing";
 
@@ -41,14 +42,12 @@ export type SelectedHighlight = {
 // Ask Gemini to order candidates by shareability when there are more than the
 // day's remaining slots. Falls back silently to rule ordering.
 async function geminiRank(profile: ProjectProfile, candidates: SelectedHighlight[]): Promise<SelectedHighlight[]> {
-  const apiKey = getOptionalEnv("GEMINI_API_KEY");
-  if (!apiKey || candidates.length < 2) return candidates;
+  const ai = createGeminiClient();
+  if (!ai || candidates.length < 2) return candidates;
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
-    const model = getOptionalEnv("GEMINI_MODEL") ?? "gemini-2.5-flash-lite";
     const result = await ai.models.generateContent({
-      model,
+      model: getGeminiModel(),
       contents: [
         `Rank these ${profile.name} highlights by how compelling they would be as a social media post today.`,
         "Judge on: concreteness of the numbers, surprise factor, and broad-audience interest.",
@@ -96,7 +95,7 @@ export async function selectHighlights(
   existingHashes: Set<string>,
   draftsToday: number
 ): Promise<SelectedHighlight[]> {
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = todayIsoDate();
   const slots = Math.max(0, profile.maxDraftsPerDay - draftsToday);
   if (slots === 0) return [];
 

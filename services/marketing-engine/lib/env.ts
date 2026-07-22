@@ -31,9 +31,14 @@ export function isDryRun() {
   return value === "1" || value === "true";
 }
 
-// Local development (next dev, no Supabase configured) runs against an
-// in-memory store and template copywriting so the full pipeline can be
-// exercised without any secrets.
+// The single dev-mode switch: fixture feeds, template copywriting, and the
+// localhost auth bypass all key off non-production builds.
+export function isDevMode() {
+  return process.env.NODE_ENV !== "production";
+}
+
+// Local development without Supabase configured additionally runs against an
+// in-memory store so the full pipeline works with zero secrets.
 export function isDevWithoutSupabase() {
-  return process.env.NODE_ENV !== "production" && !getOptionalEnv("SUPABASE_URL");
+  return isDevMode() && !getOptionalEnv("SUPABASE_URL");
 }

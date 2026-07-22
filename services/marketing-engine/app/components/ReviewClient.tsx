@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BLUESKY_LIMIT, X_LIMIT } from "@/lib/text";
 import type {
-  ChannelId,
   DraftCopy,
   DraftStatus,
   MarketingDraft,
@@ -12,10 +12,22 @@ import type {
 const statusTabs: Array<DraftStatus | "all"> = ["pending", "approved", "published", "rejected", "all"];
 const copyChannels = ["x", "bluesky", "linkedin"] as const;
 const copyLimits: Record<(typeof copyChannels)[number], number | null> = {
-  x: 280,
-  bluesky: 300,
+  x: X_LIMIT,
+  bluesky: BLUESKY_LIMIT,
   linkedin: null
 };
+
+async function patchDraft(id: string, authHeaders: Record<string, string>, body: Record<string, unknown>) {
+  const response = await fetch(`/api/drafts/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders },
+    body: JSON.stringify(body)
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? `HTTP ${response.status}`);
+  }
+}
 
 type PublishState = {
   loading: boolean;
@@ -47,12 +59,7 @@ function DraftCard({
   const saveCopy = useCallback(async () => {
     setSaving(true);
     try {
-      const response = await fetch(`/api/drafts/${draft.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ copy })
-      });
-      if (!response.ok) throw new Error((await response.json()).error ?? `HTTP ${response.status}`);
+      await patchDraft(draft.id, authHeaders, { copy });
       onChanged();
     } catch (error) {
       setPublishState({ loading: false, error: error instanceof Error ? error.message : "Save failed" });
@@ -63,12 +70,12 @@ function DraftCard({
 
   const setStatus = useCallback(
     async (status: "rejected" | "pending") => {
-      const response = await fetch(`/api/drafts/${draft.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({ status })
-      });
-      if (response.ok) onChanged();
+      try {
+        await patchDraft(draft.id, authHeaders, { status });
+        onChanged();
+      } catch (error) {
+        setPublishState({ loading: false, error: error instanceof Error ? error.message : "Status change failed" });
+      }
     },
     [authHeaders, draft.id, onChanged]
   );
@@ -77,12 +84,7 @@ function DraftCard({
     setPublishState({ loading: true });
     try {
       if (dirty) {
-        const saved = await fetch(`/api/drafts/${draft.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json", ...authHeaders },
-          body: JSON.stringify({ copy })
-        });
-        if (!saved.ok) throw new Error((await saved.json()).error ?? `HTTP ${saved.status}`);
+        await patchDraft(draft.id, authHeaders, { copy });
       }
       const response = await fetch("/api/publish", {
         method: "POST",

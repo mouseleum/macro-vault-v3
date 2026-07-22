@@ -6,7 +6,7 @@ import type {
 } from "@/types/vault";
 
 // macro_events carrying a promoted engine report use this category.
-export const ENGINE_OPPORTUNITY_CATEGORY = "engine_opportunity";
+const ENGINE_OPPORTUNITY_CATEGORY = "engine_opportunity";
 
 export function addIsoDays(dateString: string, days: number) {
   const date = new Date(`${dateString}T00:00:00.000Z`);
@@ -24,7 +24,7 @@ function stringValue(value: unknown) {
   return null;
 }
 
-export function eventMetadataText(event: MacroEvent, key: string) {
+function eventMetadataText(event: MacroEvent, key: string) {
   return stringValue(event.metadata?.[key]);
 }
 
@@ -74,7 +74,7 @@ export function toOpportunity(event: MacroEvent): MacroDashboardOpportunity {
   };
 }
 
-export function classifyCalendarTheme(event: MacroEvent) {
+function classifyCalendarTheme(event: MacroEvent) {
   const text = `${event.title} ${event.narrative}`.toLowerCase();
   if (text.includes("cpi") || text.includes("inflation") || text.includes("price")) return "Inflation";
   if (text.includes("unemployment") || text.includes("job") || text.includes("payroll") || text.includes("wage")) return "Labor";
@@ -128,7 +128,7 @@ function formatCompact(value: number) {
   }).format(value);
 }
 
-export function buildSurprise(event: MacroEvent) {
+function buildSurprise(event: MacroEvent) {
   const actualNumber = parseEventNumber(eventMetadataText(event, "actual"));
   const forecastNumber = parseEventNumber(eventMetadataText(event, "forecast"));
   if (actualNumber === null || forecastNumber === null) return null;

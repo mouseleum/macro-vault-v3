@@ -13,6 +13,15 @@ export type MarketingHighlightMetric = {
 
 export type SparklinePoint = { t: string; v: number };
 
+// Optional media attachments — used by music/creative projects: square cover
+// art rendered on the card, a waveform strip (0–1 amplitudes) drawn in place
+// of the sparkline, and streaming/pre-save links woven into the copy.
+export type MarketingHighlightMedia = {
+  coverImageUrl?: string | null;
+  waveform?: number[];
+  links?: Array<{ label: string; url: string }>;
+};
+
 export type MarketingHighlight = {
   id: string;
   type: MarketingHighlightType;
@@ -21,6 +30,7 @@ export type MarketingHighlight = {
   severity: MarketingHighlightSeverity;
   metrics: MarketingHighlightMetric[];
   sparkline?: SparklinePoint[];
+  media?: MarketingHighlightMedia | null;
   link?: string | null;
   tags: string[];
   expiresAt?: string | null;
@@ -54,6 +64,7 @@ export type MarketingDraft = {
   severity: MarketingHighlightSeverity;
   metrics: MarketingHighlightMetric[];
   sparkline: SparklinePoint[] | null;
+  media: MarketingHighlightMedia | null;
   link: string | null;
   tags: string[];
   copy: DraftCopy;

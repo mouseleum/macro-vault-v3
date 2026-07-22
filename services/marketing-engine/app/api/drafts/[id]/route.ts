@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { jsonError } from "@/lib/api";
 import { assertMarketingAuth } from "@/lib/auth";
+import { BLUESKY_LIMIT, X_LIMIT } from "@/lib/copywriter";
 import { createMarketingStore } from "@/lib/marketing-store";
 
 export const runtime = "nodejs";
@@ -10,8 +11,8 @@ const patchSchema = z
   .object({
     copy: z
       .object({
-        x: z.string().min(1).max(280),
-        bluesky: z.string().min(1).max(300),
+        x: z.string().min(1).max(X_LIMIT),
+        bluesky: z.string().min(1).max(BLUESKY_LIMIT),
         linkedin: z.string().min(1).max(8000)
       })
       .optional(),
