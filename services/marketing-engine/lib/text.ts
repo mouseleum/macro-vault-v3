@@ -15,7 +15,9 @@ export function truncate(value: string, limit: number) {
 
 // Truncation for post copy: never cuts through a URL. If the naive cut would
 // land inside a URL, the cut moves to just before that URL; a URL that fits
-// entirely within the limit is kept.
+// entirely within the limit is kept. When the straddling URL starts the
+// string (nothing useful before it), fall back to a hard cut rather than
+// degenerating to a bare ellipsis.
 export function truncateCopy(value: string, limit: number) {
   const trimmed = value.trim();
   if (trimmed.length <= limit) return trimmed;
@@ -25,7 +27,9 @@ export function truncateCopy(value: string, limit: number) {
     const start = match.index;
     const end = start + match[0].length;
     if (start < cutAt && end > cutAt) {
-      return `${trimmed.slice(0, start).trimEnd()}…`;
+      const prefix = trimmed.slice(0, start).trimEnd();
+      if (prefix.length === 0) break;
+      return `${prefix}…`;
     }
   }
 

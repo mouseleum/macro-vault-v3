@@ -36,15 +36,26 @@ create table if not exists public.marketing_posts (
   external_id text,
   url text,
   status text not null default 'posted'
-    check (status in ('posted', 'failed', 'skipped', 'dry_run')),
+    check (status in ('pending', 'posted', 'failed', 'skipped', 'dry_run')),
   error text,
   posted_at timestamptz not null default now()
 );
 
 create index if not exists marketing_posts_draft_idx on public.marketing_posts (draft_id, posted_at desc);
 
--- Safe to re-run on deployments created before the media column existed.
+-- Channel-level idempotency: at most one in-flight ('pending') or successful
+-- ('posted') row per draft+channel. A publish inserts a pending claim before
+-- calling the channel API, so concurrent publishes/retries cannot double-post;
+-- failed/skipped/dry_run rows don't occupy the slot, keeping channels retryable.
+create unique index if not exists marketing_posts_channel_claim_idx
+  on public.marketing_posts (draft_id, channel)
+  where status in ('pending', 'posted');
+
+-- Safe to re-run on deployments created before these existed.
 alter table public.marketing_drafts add column if not exists media jsonb;
+alter table public.marketing_posts drop constraint if exists marketing_posts_status_check;
+alter table public.marketing_posts add constraint marketing_posts_status_check
+  check (status in ('pending', 'posted', 'failed', 'skipped', 'dry_run'));
 
 -- The engine talks to Supabase with the service-role key only; keep RLS on so
 -- anon/authenticated roles have no access.

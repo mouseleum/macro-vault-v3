@@ -46,7 +46,7 @@ mismatched feeds to catch mis-wired env vars.
       "expiresAt": "2026-07-10",         // optional; engine drops the highlight after this date
       "media": {                          // optional; music/creative projects
         "coverImageUrl": "https://…",    //   square art rendered on the card
-        "waveform": [0.1, 0.6, 0.8],     //   0–1 amplitudes (≤200) → waveform strip
+        "waveform": [0.1, 0.6, 0.8],     //   0–1 amplitudes → waveform strip
         "links": [                        //   streaming/pre-save links for the copy
           { "label": "Spotify", "url": "https://…" }
         ]
@@ -58,8 +58,11 @@ mismatched feeds to catch mis-wired env vars.
 
 Field limits (the engine validates them): headline ≤ 200, narrative ≤ 2000,
 metric label/value ≤ 40, delta ≤ 60, ≤ 8 metrics, tag ≤ 40 chars / ≤ 12 tags,
-`link` must be a valid URL. A highlight violating a limit is **dropped
-individually** (and counted in the cron result) — it does not fail the feed.
+`link` must be a valid URL. Media limits: `coverImageUrl` must be a valid URL,
+waveform 0–1 values with ≤ 200 points (**and ≥ 8 points to actually render** —
+shorter waveforms validate but the card omits the strip), ≤ 6 links with
+labels ≤ 20 chars. A highlight violating a limit is **dropped individually**
+(and counted in the cron result) — it does not fail the feed.
 
 Reference TypeScript types: `MarketingHighlight` / `MarketingHighlightsResponse` in
 `types/vault.ts`.

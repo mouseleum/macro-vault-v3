@@ -174,19 +174,23 @@ export async function GET(request: NextRequest) {
     const recentStart = addIsoDays(todayIso, -input.days);
     const upcomingEnd = addIsoDays(todayIso, input.days);
 
-    const [regimeResult, windowEvents] = await Promise.all([
+    // Calendar events are windowed both ways, but opportunities keep no upper
+    // bound: a promoted opportunity may carry a catalyst date weeks out and
+    // must still be marketed today.
+    const [regimeResult, calendarWindow, recentEvents] = await Promise.all([
       getLatestRegime(supabase),
-      listMacroEvents(supabase, { limit: 500, from: recentStart, to: upcomingEnd })
+      listMacroEvents(supabase, { limit: 500, category: "economic_calendar", from: recentStart, to: upcomingEnd }),
+      listMacroEvents(supabase, { limit: 500, from: recentStart })
     ]);
 
-    const calendarEvents = windowEvents.filter(isEconomicCalendarEvent).map(toDashboardEvent);
+    const calendarEvents = calendarWindow.filter(isEconomicCalendarEvent).map(toDashboardEvent);
 
     const highlights: MarketingHighlight[] = [];
 
     const regime = isRecord(regimeResult.regime) ? regimeHighlight(regimeResult.regime) : null;
     if (regime) highlights.push(regime);
 
-    windowEvents
+    recentEvents
       .filter(isEngineOpportunityEvent)
       .sort((a, b) => Number(b.impact_score ?? 0) - Number(a.impact_score ?? 0))
       .slice(0, input.limit)
@@ -200,10 +204,11 @@ export async function GET(request: NextRequest) {
       .slice(0, input.limit)
       .forEach((event) => highlights.push(surpriseHighlight(event)));
 
-    // >= today so a release printing later today still gets highlighted; the
-    // surprise filter above already owns today's events once actuals exist.
+    // Future dates are always "upcoming"; today-dated events count only until
+    // an actual exists — once the number is out, the release is no longer
+    // ahead even when a missing/unparseable forecast prevents a surprise entry.
     calendarEvents
-      .filter((event) => event.event_date >= todayIso && !event.surprise)
+      .filter((event) => event.event_date > todayIso || (event.event_date === todayIso && !event.actual))
       .filter((event) => event.is_macro_critical)
       .sort((a, b) => a.event_date.localeCompare(b.event_date))
       .slice(0, input.limit)

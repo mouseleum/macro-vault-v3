@@ -5,8 +5,6 @@ import { BLUESKY_LIMIT, truncateCopy, X_LIMIT } from "./text";
 import type { ProjectProfile } from "./registry";
 import type { DraftCopy, MarketingHighlight } from "@/types/marketing";
 
-export { BLUESKY_LIMIT, X_LIMIT };
-
 const copySchema = {
   type: Type.OBJECT,
   properties: {

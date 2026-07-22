@@ -39,6 +39,15 @@ export type SelectedHighlight = {
   score: number;
 };
 
+// Starter feed files ship with EDIT-ME markers; never let unedited placeholder
+// content become a draft that a routine approval click could publish.
+const placeholderPattern = /EDIT[-\s]?ME/i;
+
+export function isPlaceholderHighlight(highlight: MarketingHighlight) {
+  const linkText = [highlight.link ?? "", ...(highlight.media?.links ?? []).map((item) => `${item.label} ${item.url}`)].join(" ");
+  return placeholderPattern.test(`${highlight.headline} ${highlight.narrative} ${linkText}`);
+}
+
 // Ask Gemini to order candidates by shareability when there are more than the
 // day's remaining slots. Falls back silently to rule ordering.
 async function geminiRank(profile: ProjectProfile, candidates: SelectedHighlight[]): Promise<SelectedHighlight[]> {
@@ -100,6 +109,11 @@ export async function selectHighlights(
   if (slots === 0) return [];
 
   const candidates = highlights
+    .filter((highlight) => {
+      if (!isPlaceholderHighlight(highlight)) return true;
+      console.warn(`[select] ${profile.slug}: skipped placeholder highlight ${highlight.id} (contains EDIT-ME marker)`);
+      return false;
+    })
     .filter((highlight) => !highlight.expiresAt || highlight.expiresAt >= todayIso)
     .filter((highlight) => meetsSeverity(highlight.severity, profile.minSeverity))
     .map((highlight) => ({

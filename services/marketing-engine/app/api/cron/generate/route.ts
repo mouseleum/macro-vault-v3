@@ -76,7 +76,10 @@ function parseFeed(profile: ProjectProfile, payload: unknown): FetchedFeed {
   return { highlights, dropped };
 }
 
-async function fetchHighlights(profile: ProjectProfile): Promise<FetchedFeed> {
+// Returns null when the profile has no usable feed in this environment (URL
+// env unset and only a dev-only fixture available) — a setup-pending state
+// reported as a skip, not a failure, so daily cron status stays meaningful.
+async function fetchHighlights(profile: ProjectProfile): Promise<FetchedFeed | null> {
   const feed = resolveFeed(profile);
 
   if (!feed.url) {
@@ -85,7 +88,7 @@ async function fetchHighlights(profile: ProjectProfile): Promise<FetchedFeed> {
       if (!payload) throw new Error(`Feed file "${profile.feedFile}" is not registered in feeds/index.ts.`);
       return parseFeed(profile, payload);
     }
-    throw new Error(`Feed URL env ${profile.feedUrlEnv} is not set.`);
+    return null;
   }
 
   const response = await fetch(feed.url, {
@@ -102,6 +105,7 @@ async function fetchHighlights(profile: ProjectProfile): Promise<FetchedFeed> {
 type ProjectRunResult = {
   project: string;
   ok: boolean;
+  skipped?: string;
   fetched?: number;
   droppedInvalid?: number;
   selected?: number;
@@ -114,6 +118,13 @@ type ProjectRunResult = {
 async function runProject(profile: ProjectProfile): Promise<ProjectRunResult> {
   const store = createMarketingStore();
   const feed = await fetchHighlights(profile);
+  if (!feed) {
+    return {
+      project: profile.slug,
+      ok: true,
+      skipped: `feed not configured (set ${profile.feedUrlEnv})`
+    };
+  }
 
   const [existingHashes, draftsToday] = await Promise.all([
     store.listContentHashes(profile.slug),

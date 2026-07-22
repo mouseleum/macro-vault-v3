@@ -48,7 +48,7 @@ npm run dev            # http://localhost:3100
 ```
 
 With no `SUPABASE_URL` set, the engine uses an in-memory store, the bundled
-fixture feed (`lib/fixtures/sample-highlights.json`), and template copywriting
+fixture feed (`feeds/macro-vault.fixture.json`), and template copywriting
 (no Gemini). Auth is bypassed on localhost. Open the review UI, hit
 **RUN GENERATE NOW**, and walk the whole pipeline; set `DRY_RUN=1` to inspect
 publish payloads in the dev server log.
@@ -64,7 +64,12 @@ Set `GEMINI_API_KEY` locally to exercise real copywriting against the fixture.
    Supabase project or a separate one).
 3. **Env vars**: copy `.env.example` into Vercel. Minimum:
    `MARKETING_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `GEMINI_API_KEY`, `VAULT_FEED_URL`, `VAULT_API_KEY`, plus `CRON_SECRET`.
+   `GEMINI_API_KEY`, `VAULT_FEED_URL`, `VAULT_API_KEY`. **`CRON_SECRET` is
+   required for scheduled runs** — Vercel only attaches auth to cron requests
+   when it exists, so without it the daily generation 401s forever. Set
+   `PUBLIC_BASE_URL` to the stable production URL so card-image links in
+   publish payloads never point at preview hosts. Profiles whose feed env is
+   unset are reported as skipped by the cron, not failed.
 4. **Channels** (each optional; unconfigured = skipped):
    - `ZAPIER_WEBHOOK_URL` — generic fan-out catch hook.
    - `BLUESKY_IDENTIFIER` + `BLUESKY_APP_PASSWORD` — app password from Bluesky
@@ -86,10 +91,12 @@ Set `GEMINI_API_KEY` locally to exercise real copywriting against the fixture.
 
 ## Music projects
 
-Two music profiles ship enabled with manual feed files: `artist` (your
+Two music profiles ship **disabled** with manual feed files: `artist` (your
 releases — **edit the EDIT-ME brand/handle/voice in `lib/registry.ts` and the
-starter content in `feeds/artist.json`**) and `song-blueprint`
-(`feeds/song-blueprint.json`). Music highlights use the optional `media`
+starter content in `feeds/artist.json`, then flip `enabled: true`**) and
+`song-blueprint` (`feeds/song-blueprint.json`). As a backstop, the selector
+skips any highlight still containing an EDIT-ME marker, so unedited
+placeholder content can never become a publishable draft. Music highlights use the optional `media`
 contract field: `coverImageUrl` renders square art on the card (a branded
 gradient placeholder is used when null), `waveform` (0–1 amplitudes) draws a
 waveform strip instead of the sparkline, and `links` (Spotify/Bandcamp/…)

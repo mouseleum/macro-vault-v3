@@ -13,19 +13,24 @@ export const marketingSetupMessage =
 
 export type DraftInput = Omit<MarketingDraft, "id" | "status" | "created_at" | "reviewed_at">;
 
-export type PostInput = {
-  draft_id: string;
-  channel: MarketingPost["channel"];
-  external_id: string | null;
-  url: string | null;
-  status: MarketingPostStatus;
-  error: string | null;
-};
-
 export type DraftFilters = {
   status?: DraftStatus;
   project?: string;
   limit?: number;
+};
+
+export type ClaimedDraft = {
+  draft: MarketingDraft;
+  // Status the draft had before the claim, so failed/dry-run publishes can
+  // restore it instead of escalating pending drafts to approved.
+  priorStatus: "pending" | "approved";
+};
+
+export type ChannelPostOutcome = {
+  status: Exclude<MarketingPostStatus, "pending">;
+  external_id?: string | null;
+  url?: string | null;
+  error?: string | null;
 };
 
 export interface MarketingStore {
@@ -40,15 +45,29 @@ export interface MarketingStore {
   // Atomically claims a pending/approved draft by setting it to "published";
   // returns null when the draft is already claimed, rejected, or missing —
   // the caller must not post to any channel without a successful claim.
-  claimDraftForPublish(id: string): Promise<MarketingDraft | null>;
+  claimDraftForPublish(id: string): Promise<ClaimedDraft | null>;
+  // Channel-level idempotency: inserts an in-flight "pending" row for
+  // draft+channel, guarded by a partial unique index over pending/posted rows.
+  // Returns null when the channel is already posted or another publish is in
+  // flight — the caller must not call the channel API without this claim.
+  claimChannelPost(draftId: string, channel: MarketingPost["channel"]): Promise<MarketingPost | null>;
+  // Resolves an in-flight claim to its terminal status.
+  resolveChannelPost(postId: string, outcome: ChannelPostOutcome): Promise<MarketingPost>;
   listContentHashes(project: string): Promise<Set<string>>;
   countDraftsSince(project: string, sinceIso: string): Promise<number>;
-  createPosts(posts: PostInput[]): Promise<MarketingPost[]>;
   listPosts(draftId: string): Promise<MarketingPost[]>;
 }
 
 function isUniqueViolation(error: { code?: string; message?: string }) {
   return error.code === "23505" || Boolean(error.message?.includes("duplicate key"));
+}
+
+// An in-flight claim older than this is treated as a crashed run and can be
+// superseded (publish maxDuration is 120s, so 10 minutes is safely past it).
+const STALE_CLAIM_MS = 10 * 60 * 1000;
+
+function isStalePending(post: MarketingPost) {
+  return post.status === "pending" && Date.now() - new Date(post.posted_at).getTime() > STALE_CLAIM_MS;
 }
 
 class SupabaseMarketingStore implements MarketingStore {
@@ -95,14 +114,74 @@ class SupabaseMarketingStore implements MarketingStore {
   }
 
   async claimDraftForPublish(id: string) {
+    // One conditional update per source status so the prior status is known
+    // exactly; each attempt is individually atomic.
+    for (const priorStatus of ["approved", "pending"] as const) {
+      const { data, error } = await this.supabase
+        .from("marketing_drafts")
+        .update({ status: "published", reviewed_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("status", priorStatus)
+        .select("*");
+      if (error) throw error;
+      if (data?.[0]) return { draft: data[0] as MarketingDraft, priorStatus };
+    }
+    return null;
+  }
+
+  async claimChannelPost(draftId: string, channel: MarketingPost["channel"]) {
+    const insertClaim = async () => {
+      const { data, error } = await this.supabase
+        .from("marketing_posts")
+        .insert({ draft_id: draftId, channel, status: "pending", external_id: null, url: null, error: null })
+        .select("*")
+        .single();
+      if (error) {
+        if (isUniqueViolation(error)) return null;
+        throw error;
+      }
+      return data as MarketingPost;
+    };
+
+    const claimed = await insertClaim();
+    if (claimed) return claimed;
+
+    // Blocked: either already posted, a live publish is in flight, or a
+    // crashed run left a stale pending row we can supersede.
+    const { data: blocker, error: blockerError } = await this.supabase
+      .from("marketing_posts")
+      .select("*")
+      .eq("draft_id", draftId)
+      .eq("channel", channel)
+      .in("status", ["pending", "posted"])
+      .maybeSingle();
+    if (blockerError) throw blockerError;
+    if (!blocker || !isStalePending(blocker as MarketingPost)) return null;
+
+    const { error: staleError } = await this.supabase
+      .from("marketing_posts")
+      .update({ status: "failed", error: "stale in-flight claim superseded" })
+      .eq("id", (blocker as MarketingPost).id)
+      .eq("status", "pending");
+    if (staleError) throw staleError;
+    return insertClaim();
+  }
+
+  async resolveChannelPost(postId: string, outcome: ChannelPostOutcome) {
     const { data, error } = await this.supabase
-      .from("marketing_drafts")
-      .update({ status: "published", reviewed_at: new Date().toISOString() })
-      .eq("id", id)
-      .in("status", ["pending", "approved"])
-      .select("*");
+      .from("marketing_posts")
+      .update({
+        status: outcome.status,
+        external_id: outcome.external_id ?? null,
+        url: outcome.url ?? null,
+        error: outcome.error ?? null,
+        posted_at: new Date().toISOString()
+      })
+      .eq("id", postId)
+      .select("*")
+      .single();
     if (error) throw error;
-    return (data?.[0] ?? null) as MarketingDraft | null;
+    return data as MarketingPost;
   }
 
   async listContentHashes(project: string) {
@@ -124,13 +203,6 @@ class SupabaseMarketingStore implements MarketingStore {
       .gte("created_at", sinceIso);
     if (error) throw error;
     return count ?? 0;
-  }
-
-  async createPosts(posts: PostInput[]) {
-    if (posts.length === 0) return [];
-    const { data, error } = await this.supabase.from("marketing_posts").insert(posts).select("*");
-    if (error) throw error;
-    return (data ?? []) as MarketingPost[];
   }
 
   async listPosts(draftId: string) {
@@ -195,8 +267,44 @@ class MemoryMarketingStore implements MarketingStore {
   async claimDraftForPublish(id: string) {
     const existing = memoryState().drafts.find((draft) => draft.id === id);
     if (!existing || (existing.status !== "pending" && existing.status !== "approved")) return null;
+    const priorStatus = existing.status;
     existing.status = "published";
     existing.reviewed_at = new Date().toISOString();
+    return { draft: existing, priorStatus };
+  }
+
+  async claimChannelPost(draftId: string, channel: MarketingPost["channel"]) {
+    const state = memoryState();
+    const blocker = state.posts.find(
+      (post) => post.draft_id === draftId && post.channel === channel && (post.status === "pending" || post.status === "posted")
+    );
+    if (blocker) {
+      if (!isStalePending(blocker)) return null;
+      blocker.status = "failed";
+      blocker.error = "stale in-flight claim superseded";
+    }
+    const claim: MarketingPost = {
+      id: crypto.randomUUID(),
+      draft_id: draftId,
+      channel,
+      external_id: null,
+      url: null,
+      status: "pending",
+      error: null,
+      posted_at: new Date().toISOString()
+    };
+    state.posts.unshift(claim);
+    return claim;
+  }
+
+  async resolveChannelPost(postId: string, outcome: ChannelPostOutcome) {
+    const existing = memoryState().posts.find((post) => post.id === postId);
+    if (!existing) throw new Error("Post claim not found");
+    existing.status = outcome.status;
+    existing.external_id = outcome.external_id ?? null;
+    existing.url = outcome.url ?? null;
+    existing.error = outcome.error ?? null;
+    existing.posted_at = new Date().toISOString();
     return existing;
   }
 
@@ -210,16 +318,6 @@ class MemoryMarketingStore implements MarketingStore {
 
   async countDraftsSince(project: string, sinceIso: string) {
     return memoryState().drafts.filter((draft) => draft.project === project && draft.created_at >= sinceIso).length;
-  }
-
-  async createPosts(posts: PostInput[]) {
-    const created = posts.map((post) => ({
-      ...post,
-      id: crypto.randomUUID(),
-      posted_at: new Date().toISOString()
-    }));
-    memoryState().posts.unshift(...created);
-    return created;
   }
 
   async listPosts(draftId: string) {

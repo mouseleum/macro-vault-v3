@@ -20,12 +20,6 @@ export function getOptionalEnv(name: string): string | undefined {
   return value || undefined;
 }
 
-export function getEnvStatus() {
-  return Object.fromEntries(
-    requiredServerEnv.map((name) => [name, Boolean(process.env[name]?.trim())])
-  ) as Record<RequiredServerEnv, boolean>;
-}
-
 export function isDryRun() {
   const value = process.env.DRY_RUN?.trim().toLowerCase();
   return value === "1" || value === "true";
