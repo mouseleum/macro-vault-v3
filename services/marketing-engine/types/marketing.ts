@@ -74,7 +74,9 @@ export type MarketingDraft = {
   reviewed_at: string | null;
 };
 
-export type MarketingPostStatus = "posted" | "failed" | "skipped" | "dry_run";
+// "pending" rows are in-flight channel claims inserted before the channel API
+// call; they resolve to one of the terminal statuses (or mark a crashed run).
+export type MarketingPostStatus = "pending" | "posted" | "failed" | "skipped" | "dry_run";
 
 export type MarketingPost = {
   id: string;

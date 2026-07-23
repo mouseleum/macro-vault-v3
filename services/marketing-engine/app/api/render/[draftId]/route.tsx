@@ -1,9 +1,9 @@
 import { ImageResponse } from "next/og";
 import { NextResponse } from "next/server";
-import { createMarketingStore } from "@/lib/marketing-store";
+import { createMarketingStore, isMissingMarketingTable, marketingSetupMessage } from "@/lib/marketing-store";
 import { getProject } from "@/lib/registry";
 import { truncate } from "@/lib/text";
-import type { MarketingHighlightSeverity, SparklinePoint } from "@/types/marketing";
+import type { MarketingDraft, MarketingHighlightSeverity, SparklinePoint } from "@/types/marketing";
 
 export const runtime = "nodejs";
 
@@ -56,7 +56,17 @@ function waveformBars(waveform: number[], bars = 56) {
 export async function GET(request: Request, context: { params: Promise<{ draftId: string }> }) {
   const { draftId } = await context.params;
   const store = createMarketingStore();
-  const draft = await store.getDraft(draftId);
+  // This route is public: never leak raw database errors through it.
+  let draft: MarketingDraft | null;
+  try {
+    draft = await store.getDraft(draftId);
+  } catch (error) {
+    if (error && typeof error === "object" && isMissingMarketingTable(error as { code?: string; message?: string })) {
+      return NextResponse.json({ setupRequired: true, message: marketingSetupMessage }, { status: 503 });
+    }
+    console.error(`[render] failed to load draft ${draftId}`, error);
+    return NextResponse.json({ error: "Card unavailable" }, { status: 500 });
+  }
   if (!draft) return NextResponse.json({ error: "Draft not found" }, { status: 404 });
 
   const profile = getProject(draft.project);
@@ -73,7 +83,9 @@ export async function GET(request: Request, context: { params: Promise<{ draftId
   const spark = !waveform && draft.sparkline && draft.sparkline.length >= 2 ? draft.sparkline : null;
   // A release announcement isn't an alarm — milestones drop the severity chip.
   const showSeverity = draft.type !== "milestone";
-  const hasCoverLayout = Boolean(media);
+  // The cover layout is for visual media only; links-only or empty media
+  // objects (valid per the contract) keep the standard wide layout.
+  const hasCoverLayout = Boolean(cover || waveform);
   const sparkWidth = 380;
   const sparkHeight = 140;
   const dateLabel = draft.created_at.slice(0, 10);

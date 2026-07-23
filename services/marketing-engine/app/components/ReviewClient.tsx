@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { BLUESKY_LIMIT, X_LIMIT } from "@/lib/text";
 import type {
+  ChannelId,
   DraftCopy,
   DraftStatus,
   MarketingDraft,
+  MarketingPost,
   PublishResult
 } from "@/types/marketing";
 
@@ -49,8 +51,58 @@ function DraftCard({
   const [channel, setChannel] = useState<(typeof copyChannels)[number]>("x");
   const [publishState, setPublishState] = useState<PublishState>({ loading: false });
   const [saving, setSaving] = useState(false);
+  const [posts, setPosts] = useState<MarketingPost[]>([]);
+  const [retrying, setRetrying] = useState<ChannelId | null>(null);
 
   useEffect(() => setCopy(draft.copy), [draft.copy]);
+
+  const loadPosts = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/drafts/${draft.id}`, { headers: authHeaders });
+      const body = (await response.json()) as { posts?: MarketingPost[] };
+      if (response.ok) setPosts(body.posts ?? []);
+    } catch {
+      // The publish log is auxiliary; failures here shouldn't block review.
+    }
+  }, [authHeaders, draft.id]);
+
+  // Published drafts show their per-channel publish log so partial failures
+  // stay visible (and retryable) after a page reload.
+  useEffect(() => {
+    if (draft.status === "published") void loadPosts();
+  }, [draft.status, loadPosts]);
+
+  // Latest outcome per channel (posts arrive newest-first).
+  const channelOutcomes = useMemo(() => {
+    const latest = new Map<ChannelId, MarketingPost>();
+    for (const post of posts) {
+      if (!latest.has(post.channel)) latest.set(post.channel, post);
+    }
+    return [...latest.values()];
+  }, [posts]);
+
+  const retryChannel = useCallback(
+    async (target: ChannelId) => {
+      setRetrying(target);
+      setPublishState({ loading: false });
+      try {
+        const response = await fetch("/api/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders },
+          body: JSON.stringify({ draftId: draft.id, channels: [target] })
+        });
+        const body = (await response.json()) as { dryRun?: boolean; results?: PublishResult[]; error?: string };
+        if (!response.ok && !body.results) throw new Error(body.error ?? `HTTP ${response.status}`);
+        setPublishState({ loading: false, dryRun: body.dryRun, results: body.results });
+        await loadPosts();
+      } catch (error) {
+        setPublishState({ loading: false, error: error instanceof Error ? error.message : "Retry failed" });
+      } finally {
+        setRetrying(null);
+      }
+    },
+    [authHeaders, draft.id, loadPosts]
+  );
 
   const dirty = useMemo(() => JSON.stringify(copy) !== JSON.stringify(draft.copy), [copy, draft.copy]);
   const limit = copyLimits[channel];
@@ -154,6 +206,33 @@ function DraftCard({
               REOPEN
             </button>
           </div>
+        ) : null}
+
+        {draft.status === "published" && channelOutcomes.length > 0 ? (
+          <ul className="publish-results">
+            {channelOutcomes.map((post) => (
+              <li key={post.channel} className={`result-${post.status}`}>
+                {post.channel}: {post.status}
+                {post.url ? (
+                  <>
+                    {" — "}
+                    <a href={post.url} target="_blank" rel="noreferrer">
+                      {post.url}
+                    </a>
+                  </>
+                ) : null}
+                {post.error ? ` — ${post.error}` : ""}
+                {post.status === "failed" || post.status === "skipped" ? (
+                  <>
+                    {" "}
+                    <button className="btn" onClick={() => retryChannel(post.channel)} disabled={retrying !== null}>
+                      {retrying === post.channel ? "RETRYING…" : "RETRY"}
+                    </button>
+                  </>
+                ) : null}
+              </li>
+            ))}
+          </ul>
         ) : null}
 
         {publishState.error ? <div className="notice error">{publishState.error}</div> : null}

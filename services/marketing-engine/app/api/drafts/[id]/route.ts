@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { jsonError } from "@/lib/api";
 import { assertMarketingAuth } from "@/lib/auth";
-import { BLUESKY_LIMIT, X_LIMIT } from "@/lib/copywriter";
+import { BLUESKY_LIMIT, X_LIMIT } from "@/lib/text";
 import { createMarketingStore } from "@/lib/marketing-store";
 
 export const runtime = "nodejs";

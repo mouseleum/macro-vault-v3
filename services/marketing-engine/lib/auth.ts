@@ -38,8 +38,24 @@ export function assertCronAuth(request: NextRequest): NextResponse | null {
   if (key && cronSecret && key === cronSecret) return null;
   if (key && key === getEnv("MARKETING_API_KEY")) return null;
 
+  // Vercel only attaches the Authorization header to cron invocations when
+  // the CRON_SECRET env var exists on the project — an unauthenticated cron
+  // hit is almost always that missing configuration, so say so loudly.
+  const isVercelCron = request.headers.get("user-agent")?.includes("vercel-cron") ?? false;
+  if (isVercelCron && !key) {
+    console.error(
+      "[cron] Vercel cron request arrived with no Authorization header — set the CRON_SECRET env var on this project (and redeploy) or scheduled generation will never run."
+    );
+  }
+
   return NextResponse.json(
-    { error: "Unauthorized", details: "Provide Authorization: Bearer <CRON_SECRET or MARKETING_API_KEY>." },
+    {
+      error: "Unauthorized",
+      details:
+        isVercelCron && !key
+          ? "Vercel cron carries no auth until the CRON_SECRET env var is set on the project."
+          : "Provide Authorization: Bearer <CRON_SECRET or MARKETING_API_KEY>."
+    },
     { status: 401 }
   );
 }

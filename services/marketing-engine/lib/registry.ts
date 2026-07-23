@@ -55,10 +55,11 @@ export const projects: ProjectProfile[] = [
   },
   {
     // EDIT ME: artist name, handle, colors, and voice — see feeds/artist.json
-    // for the matching starter content.
+    // for the matching starter content. Flip enabled once the placeholders
+    // are replaced; the selector also skips EDIT-ME content as a backstop.
     slug: "artist",
     name: "EDIT ME (Artist)",
-    enabled: true,
+    enabled: false,
     feedUrlEnv: "ARTIST_FEED_URL",
     feedKeyEnv: "ARTIST_FEED_API_KEY",
     feedFile: "artist",
@@ -76,9 +77,11 @@ export const projects: ProjectProfile[] = [
     maxDraftsPerDay: 2
   },
   {
+    // Flip enabled once the EDIT-ME placeholders in feeds/song-blueprint.json
+    // are replaced with real content.
     slug: "song-blueprint",
     name: "Song Blueprint",
-    enabled: true,
+    enabled: false,
     feedUrlEnv: "SONG_BLUEPRINT_FEED_URL",
     feedKeyEnv: "SONG_BLUEPRINT_API_KEY",
     feedFile: "song-blueprint",
