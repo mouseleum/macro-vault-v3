@@ -139,6 +139,12 @@ a {
   color: var(--red);
 }
 
+/* Indeterminate publish outcome: needs a human to check the platform. */
+.notice.warn {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+
 .draft-card {
   border: 1px solid var(--line);
   border-radius: 12px;

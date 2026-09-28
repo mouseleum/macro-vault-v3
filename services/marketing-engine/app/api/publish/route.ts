@@ -22,12 +22,26 @@ const publishSchema = z.object({
 type ChannelRun = {
   result: PublishResult;
   post: MarketingPost | null;
+  // The draft must not be handed back as publishable while this channel is
+  // live or unresolved — reverting it would hide the override control and
+  // invite a duplicate.
+  blocksRevert: boolean;
 };
 
-const claimRefusal: Record<"already_posted" | "unresolved_outcome" | "in_flight", string> = {
-  already_posted: "already posted to this channel",
-  unresolved_outcome: "a previous attempt's outcome is unknown — verify on the platform, then retry with force",
-  in_flight: "another publish is in flight for this channel"
+// A refusal is reported with the status that describes the channel's real
+// state, not "skipped": an unresolved or in-flight channel is genuinely
+// unknown, and reporting it as skipped made the aggregation below believe
+// nothing had happened.
+const claimRefusal: Record<
+  "already_posted" | "unresolved_outcome" | "in_flight",
+  { status: "skipped" | "unknown"; error: string }
+> = {
+  already_posted: { status: "skipped", error: "already posted to this channel" },
+  unresolved_outcome: {
+    status: "unknown",
+    error: "a previous attempt's outcome is unknown — verify on the platform, then retry with force"
+  },
+  in_flight: { status: "unknown", error: "another publish is in flight for this channel" }
 };
 
 // Claims the channel slot, runs the adapter, and resolves the claim. The claim
@@ -42,9 +56,13 @@ async function publishChannel(
 ): Promise<ChannelRun> {
   const claim = await store.claimChannelPost(draft.id, channel, { force: context.force });
   if (!claim.ok) {
+    const refusal = claimRefusal[claim.reason];
     return {
-      result: { channel, status: "skipped", error: claimRefusal[claim.reason] },
-      post: null
+      result: { channel, status: refusal.status, error: refusal.error },
+      post: null,
+      // Every refusal means the database already holds a live, posted or
+      // unresolved row for this channel, so none of them may trigger a revert.
+      blocksRevert: true
     };
   }
 
@@ -86,7 +104,7 @@ async function publishChannel(
     );
   }
 
-  return { result, post };
+  return { result, post, blocksRevert: result.status === "posted" || result.status === "unknown" };
 }
 
 export async function POST(request: NextRequest) {
@@ -159,12 +177,12 @@ export async function POST(request: NextRequest) {
       const anyDryRun = results.some((result) => result.status === "dry_run");
       const anyUnknown = results.some((result) => result.status === "unknown");
 
-      // A dry run or a fully failed publish must not consume the draft: restore
-      // the exact pre-claim state so pending drafts stay pending. An unknown
-      // outcome blocks the revert — the post may be live, and handing the draft
-      // back as publishable would invite a duplicate.
+      // A dry run or a definitely-failed publish must not consume the draft:
+      // restore the exact pre-claim state so pending drafts stay pending. Any
+      // channel that is live or unresolved blocks the revert — the post may
+      // already be out, and a reverted draft hides the retry control.
       let updated = draft;
-      if (claimed && !anyPosted && !anyUnknown) {
+      if (claimed && !runs.some((run) => run.blocksRevert)) {
         updated = await revert();
       }
 

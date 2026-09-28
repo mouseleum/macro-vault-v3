@@ -1,5 +1,5 @@
 import { getOptionalEnv } from "../env";
-import { cardImageUrl, type ChannelAdapter } from "./types";
+import { cardImageUrl, writeFailureStatus, type ChannelAdapter } from "./types";
 
 // Generic fan-out: POST the approved draft to a Zapier catch hook and let the
 // Zap route it anywhere (Slack, Notion, LinkedIn, email digests, ...).
@@ -35,7 +35,12 @@ export const publishToZapier: ChannelAdapter = async (draft, profile, context) =
   });
 
   if (!response.ok) {
-    return { channel: "zapier", status: "failed", error: `Zapier hook returned ${response.status}` };
+    const status = writeFailureStatus(response.status);
+    return {
+      channel: "zapier",
+      status,
+      error: `Zapier hook returned ${response.status}${status === "unknown" ? " — may have been delivered" : ""}`
+    };
   }
 
   const body = (await response.json().catch(() => ({}))) as { id?: string; request_id?: string };

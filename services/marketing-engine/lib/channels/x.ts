@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { getOptionalEnv } from "../env";
-import { cardImageUrl, type ChannelAdapter } from "./types";
+import { cardImageUrl, writeFailureStatus, type ChannelAdapter } from "./types";
 
 // Minimal OAuth 1.0a (HMAC-SHA1) signing — enough for the two X endpoints we
 // call, avoiding a dependency. Body params are excluded from the signature,
@@ -94,7 +94,14 @@ export const publishToX: ChannelAdapter = async (draft, profile, context) => {
   });
 
   if (!response.ok) {
-    return { channel: "x", status: "failed", error: `X tweet create returned ${response.status}: ${(await response.text()).slice(0, 200)}` };
+    const status = writeFailureStatus(response.status);
+    return {
+      channel: "x",
+      status,
+      error:
+        `X tweet create returned ${response.status}: ${(await response.text()).slice(0, 200)}` +
+        (status === "unknown" ? " — may have been posted" : "")
+    };
   }
 
   const body = (await response.json()) as { data?: { id?: string } };

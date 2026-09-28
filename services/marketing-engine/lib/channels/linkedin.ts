@@ -1,5 +1,5 @@
 import { getOptionalEnv } from "../env";
-import { cardImageUrl, type ChannelAdapter } from "./types";
+import { cardImageUrl, writeFailureStatus, type ChannelAdapter } from "./types";
 
 // LinkedIn ships through a dedicated Zapier hook wired to a "Create Share
 // Update" action — the native LinkedIn API needs app review, which isn't
@@ -32,7 +32,12 @@ export const publishToLinkedIn: ChannelAdapter = async (draft, profile, context)
   });
 
   if (!response.ok) {
-    return { channel: "linkedin", status: "failed", error: `LinkedIn hook returned ${response.status}` };
+    const status = writeFailureStatus(response.status);
+    return {
+      channel: "linkedin",
+      status,
+      error: `LinkedIn hook returned ${response.status}${status === "unknown" ? " — may have been delivered" : ""}`
+    };
   }
 
   return { channel: "linkedin", status: "posted" };

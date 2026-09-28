@@ -169,8 +169,9 @@ class SupabaseMarketingStore implements MarketingStore {
     const rows = (existing ?? []) as MarketingPost[];
 
     // "posted" is not in the claim index (see marketing.sql), so it is checked
-    // here instead.
-    if (rows.some((row) => row.status === "posted") && !options.force) {
+    // here instead. force does NOT override this: a confirmed live post must
+    // never be duplicated by a retry meant for an unresolved one.
+    if (rows.some((row) => row.status === "posted")) {
       return { ok: false, reason: "already_posted" };
     }
     if (rows.some((row) => row.status === "pending" && !isStalePending(row))) {
@@ -194,13 +195,17 @@ class SupabaseMarketingStore implements MarketingStore {
     if (unresolved && !options.force) return { ok: false, reason: "unresolved_outcome" };
 
     if (options.force) {
-      const { error } = await this.supabase
-        .from("marketing_posts")
-        .update({ status: "failed", error: "superseded by forced retry" })
-        .eq("draft_id", draftId)
-        .eq("channel", channel)
-        .in("status", ["pending", "unknown"]);
-      if (error) throw error;
+      // Scoped to the ids just read, never to (draft_id, channel): a broad
+      // update would also clear a live claim inserted after the read, vacating
+      // the index slot and letting two publishes post at once.
+      const supersede = rows.filter((row) => row.status === "pending" || row.status === "unknown").map((row) => row.id);
+      if (supersede.length > 0) {
+        const { error } = await this.supabase
+          .from("marketing_posts")
+          .update({ status: "failed", error: "superseded by forced retry" })
+          .in("id", supersede);
+        if (error) throw error;
+      }
     }
 
     const { data, error } = await this.supabase
@@ -213,7 +218,29 @@ class SupabaseMarketingStore implements MarketingStore {
       if (isUniqueViolation(error)) return { ok: false, reason: "in_flight" };
       throw error;
     }
-    return { ok: true, post: data as MarketingPost };
+    const claim = data as MarketingPost;
+
+    // Re-check for a posted row now that the claim is held. "posted" is not in
+    // the claim index, so a concurrent publish that finished between the read
+    // above and this insert would otherwise go undetected and post twice. The
+    // claim is released before returning so the channel stays usable.
+    const { data: postedRows, error: postedError } = await this.supabase
+      .from("marketing_posts")
+      .select("id")
+      .eq("draft_id", draftId)
+      .eq("channel", channel)
+      .eq("status", "posted")
+      .limit(1);
+    if (postedError) throw postedError;
+    if ((postedRows ?? []).length > 0) {
+      await this.supabase
+        .from("marketing_posts")
+        .update({ status: "skipped", error: "another publish posted this channel first" })
+        .eq("id", claim.id);
+      return { ok: false, reason: "already_posted" };
+    }
+
+    return { ok: true, post: claim };
   }
 
   async resolveChannelPost(postId: string, outcome: ChannelPostOutcome) {
@@ -337,7 +364,8 @@ class MemoryMarketingStore implements MarketingStore {
         (post.status === "posted" || post.status === "pending" || post.status === "unknown")
     );
 
-    if (rows.some((row) => row.status === "posted") && !options.force) {
+    // force does NOT override a confirmed post — same rule as Supabase.
+    if (rows.some((row) => row.status === "posted")) {
       return { ok: false, reason: "already_posted" };
     }
     if (rows.some((row) => row.status === "pending" && !isStalePending(row))) {

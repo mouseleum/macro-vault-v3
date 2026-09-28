@@ -41,8 +41,11 @@ export type SelectedHighlight = {
 
 // Starter feed files and profiles ship with EDIT-ME markers; never let unedited
 // placeholder content become a draft that a routine approval click could
-// publish. Tolerates EDITME / EDIT_ME / repeated separators.
-const placeholderPattern = /EDIT[-_\s]*ME/i;
+// publish. Tolerates EDITME / EDIT_ME / repeated separators, but the word
+// boundaries are load-bearing: unanchored, this matches any "…edit" + "me…"
+// pair, and in a macro product "credit metrics", "credit measures" and
+// "credit memo" are all ordinary copy that would be silently dropped.
+const placeholderPattern = /\bEDIT[-_\s]*ME\b/i;
 
 export function isPlaceholderHighlight(highlight: MarketingHighlight) {
   const parts = [

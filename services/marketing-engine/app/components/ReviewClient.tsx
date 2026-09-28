@@ -35,6 +35,7 @@ type PublishState = {
   loading: boolean;
   dryRun?: boolean;
   results?: PublishResult[];
+  needsAttention?: boolean;
   error?: string;
 };
 
@@ -66,10 +67,12 @@ function DraftCard({
     }
   }, [authHeaders, draft.id]);
 
-  // Published drafts show their per-channel publish log so partial failures
-  // stay visible (and retryable) after a page reload.
+  // Loaded for every status, not just published: a draft can sit at "pending"
+  // while still carrying an unresolved channel row, and gating this on
+  // "published" made the only override control unreachable for exactly the
+  // drafts that needed it.
   useEffect(() => {
-    if (draft.status === "published") void loadPosts();
+    void loadPosts();
   }, [draft.status, loadPosts]);
 
   // Latest outcome per channel (posts arrive newest-first).
@@ -97,9 +100,19 @@ function DraftCard({
           headers: { "Content-Type": "application/json", ...authHeaders },
           body: JSON.stringify({ draftId: draft.id, channels: [target], ...(force ? { force: true } : {}) })
         });
-        const body = (await response.json()) as { dryRun?: boolean; results?: PublishResult[]; error?: string };
+        const body = (await response.json()) as {
+          dryRun?: boolean;
+          results?: PublishResult[];
+          needsAttention?: boolean;
+          error?: string;
+        };
         if (!response.ok && !body.results) throw new Error(body.error ?? `HTTP ${response.status}`);
-        setPublishState({ loading: false, dryRun: body.dryRun, results: body.results });
+        setPublishState({
+          loading: false,
+          dryRun: body.dryRun,
+          results: body.results,
+          needsAttention: body.needsAttention
+        });
         await loadPosts();
       } catch (error) {
         setPublishState({ loading: false, error: error instanceof Error ? error.message : "Retry failed" });
@@ -149,9 +162,19 @@ function DraftCard({
         headers: { "Content-Type": "application/json", ...authHeaders },
         body: JSON.stringify({ draftId: draft.id })
       });
-      const body = (await response.json()) as { dryRun?: boolean; results?: PublishResult[]; error?: string };
+      const body = (await response.json()) as {
+        dryRun?: boolean;
+        results?: PublishResult[];
+        needsAttention?: boolean;
+        error?: string;
+      };
       if (!response.ok && !body.results) throw new Error(body.error ?? `HTTP ${response.status}`);
-      setPublishState({ loading: false, dryRun: body.dryRun, results: body.results });
+      setPublishState({
+        loading: false,
+        dryRun: body.dryRun,
+        results: body.results,
+        needsAttention: body.needsAttention
+      });
       onChanged();
     } catch (error) {
       setPublishState({ loading: false, error: error instanceof Error ? error.message : "Publish failed" });
@@ -214,7 +237,7 @@ function DraftCard({
           </div>
         ) : null}
 
-        {draft.status === "published" && channelOutcomes.length > 0 ? (
+        {channelOutcomes.length > 0 ? (
           <ul className="publish-results">
             {channelOutcomes.map((post) => (
               <li key={post.channel} className={`result-${post.status}`}>
@@ -254,6 +277,11 @@ function DraftCard({
         ) : null}
 
         {publishState.error ? <div className="notice error">{publishState.error}</div> : null}
+        {publishState.needsAttention ? (
+          <div className="notice warn">
+            At least one channel&apos;s outcome is unknown — it may already be live. Check the platform before retrying.
+          </div>
+        ) : null}
         {publishState.results ? (
           <ul className="publish-results">
             {publishState.dryRun ? <li className="result-dry_run">DRY RUN — nothing was posted.</li> : null}
@@ -320,20 +348,39 @@ export function ReviewClient() {
       const body = (await response.json()) as {
         error?: string;
         message?: string;
-        results?: { project: string; ok: boolean; skipped?: string; error?: string; drafted?: string[] }[];
+        results?: {
+          project: string;
+          ok: boolean;
+          skipped?: string;
+          error?: string;
+          drafted?: string[];
+          droppedPlaceholder?: number;
+        }[];
       };
-      if (!response.ok && response.status !== 207) {
-        throw new Error(body.error ?? body.message ?? `HTTP ${response.status}`);
-      }
-      // A run can succeed while generating nothing (feed unconfigured,
-      // placeholder profile, every project skipped). Say so instead of leaving
-      // an unexplained empty queue.
+
+      // Per-project detail is worth more than the status code: describe it even
+      // when everything failed (500), which otherwise reads as a bare "HTTP 500"
+      // while the less severe 207 explains itself.
       const notes = (body.results ?? [])
-        .filter((result) => result.skipped || !result.ok)
-        .map((result) => `${result.project}: ${result.skipped ?? result.error ?? "failed"}`);
+        .filter((result) => result.skipped || !result.ok || (result.droppedPlaceholder ?? 0) > 0)
+        .map((result) => {
+          if (result.skipped) return `${result.project}: ${result.skipped}`;
+          if (!result.ok) return `${result.project}: ${result.error ?? "failed"}`;
+          return `${result.project}: ${result.droppedPlaceholder} highlight(s) skipped as placeholder content`;
+        });
+
+      if (!response.ok && response.status !== 207) {
+        throw new Error(
+          notes.length > 0 ? notes.join("; ") : body.error ?? body.message ?? `HTTP ${response.status}`
+        );
+      }
+
+      // loadDrafts clears the banner, so the summary is set after it — a run can
+      // succeed while generating nothing (feed unconfigured, placeholder
+      // profile, every project skipped) and that must not look like success.
       const drafted = (body.results ?? []).reduce((total, result) => total + (result.drafted?.length ?? 0), 0);
-      setError(drafted === 0 && notes.length > 0 ? `No drafts generated — ${notes.join("; ")}` : null);
       await loadDrafts();
+      if (drafted === 0 && notes.length > 0) setError(`No drafts generated — ${notes.join("; ")}`);
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : "Generate failed");
     } finally {

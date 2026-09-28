@@ -6,7 +6,7 @@ import { generateCopy } from "@/lib/copywriter";
 import { isDevMode } from "@/lib/env";
 import { createMarketingStore } from "@/lib/marketing-store";
 import { enabledProjects, resolveFeed, type ProjectProfile } from "@/lib/registry";
-import { placeholderProfileField, selectHighlights } from "@/lib/select";
+import { isPlaceholderHighlight, placeholderProfileField, selectHighlights } from "@/lib/select";
 import { feedFiles } from "@/feeds";
 import type { MarketingHighlight } from "@/types/marketing";
 
@@ -108,6 +108,7 @@ type ProjectRunResult = {
   skipped?: string;
   fetched?: number;
   droppedInvalid?: number;
+  droppedPlaceholder?: number;
   selected?: number;
   drafted?: string[];
   skippedDuplicate?: number;
@@ -144,6 +145,9 @@ async function runProject(profile: ProjectProfile): Promise<ProjectRunResult> {
   ]);
 
   const selected = await selectHighlights(profile, feed.highlights, existingHashes, draftsToday);
+  // Reported rather than only console.warn'd: a dropped placeholder otherwise
+  // looks identical to a thin news day.
+  const droppedPlaceholder = feed.highlights.filter(isPlaceholderHighlight).length;
 
   // Copywriting calls are independent — run them in parallel, and never let
   // one bad candidate abort the rest.
@@ -180,6 +184,7 @@ async function runProject(profile: ProjectProfile): Promise<ProjectRunResult> {
     ok: outcomes.every((outcome) => !("failed" in outcome)),
     fetched: feed.highlights.length,
     droppedInvalid: feed.dropped,
+    droppedPlaceholder,
     selected: selected.length,
     drafted: outcomes.flatMap((outcome) => ("draftId" in outcome && outcome.draftId ? [outcome.draftId] : [])),
     skippedDuplicate: outcomes.filter((outcome) => "duplicate" in outcome).length,
