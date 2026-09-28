@@ -76,7 +76,11 @@ export type MarketingDraft = {
 
 // "pending" rows are in-flight channel claims inserted before the channel API
 // call; they resolve to one of the terminal statuses (or mark a crashed run).
-export type MarketingPostStatus = "pending" | "posted" | "failed" | "skipped" | "dry_run";
+// "unknown" means the attempt's outcome is indeterminate — the request may have
+// reached the platform before the failure — so it must never be retried
+// automatically. "failed" is reserved for definite non-delivery (the platform
+// answered with an error), which is always safe to retry.
+export type MarketingPostStatus = "pending" | "posted" | "unknown" | "failed" | "skipped" | "dry_run";
 
 export type MarketingPost = {
   id: string;

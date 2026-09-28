@@ -176,11 +176,13 @@ export async function GET(request: NextRequest) {
 
     // Calendar events are windowed both ways, but opportunities keep no upper
     // bound: a promoted opportunity may carry a catalyst date weeks out and
-    // must still be marketed today.
+    // must still be marketed today. Both queries filter by category in the DB —
+    // without it the row budget is spent on future calendar events (ordered
+    // event_date desc) and no opportunity row survives the limit.
     const [regimeResult, calendarWindow, recentEvents] = await Promise.all([
       getLatestRegime(supabase),
       listMacroEvents(supabase, { limit: 500, category: "economic_calendar", from: recentStart, to: upcomingEnd }),
-      listMacroEvents(supabase, { limit: 500, from: recentStart })
+      listMacroEvents(supabase, { limit: 500, category: "engine_opportunity", from: recentStart })
     ]);
 
     const calendarEvents = calendarWindow.filter(isEconomicCalendarEvent).map(toDashboardEvent);

@@ -6,7 +6,7 @@ import { generateCopy } from "@/lib/copywriter";
 import { isDevMode } from "@/lib/env";
 import { createMarketingStore } from "@/lib/marketing-store";
 import { enabledProjects, resolveFeed, type ProjectProfile } from "@/lib/registry";
-import { selectHighlights } from "@/lib/select";
+import { placeholderProfileField, selectHighlights } from "@/lib/select";
 import { feedFiles } from "@/feeds";
 import type { MarketingHighlight } from "@/types/marketing";
 
@@ -117,6 +117,18 @@ type ProjectRunResult = {
 
 async function runProject(profile: ProjectProfile): Promise<ProjectRunResult> {
   const store = createMarketingStore();
+
+  // An unedited brand block would be rendered onto every card and post, so an
+  // enabled-but-unedited profile is skipped before anything is generated.
+  const placeholderField = placeholderProfileField(profile);
+  if (placeholderField) {
+    return {
+      project: profile.slug,
+      ok: true,
+      skipped: `profile still has placeholder ${placeholderField} (edit lib/registry.ts)`
+    };
+  }
+
   const feed = await fetchHighlights(profile);
   if (!feed) {
     return {

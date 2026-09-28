@@ -267,6 +267,9 @@ a {
 .result-dry_run { color: var(--blue); }
 .result-skipped { color: var(--muted-2); }
 .result-failed { color: var(--red); }
+/* Indeterminate outcome: a human has to check the platform before retrying. */
+.result-unknown,
+.result-pending { color: var(--amber); }
 
 .empty {
   color: var(--muted-2);

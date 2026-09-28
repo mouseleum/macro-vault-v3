@@ -82,14 +82,20 @@ function DraftCard({
   }, [posts]);
 
   const retryChannel = useCallback(
-    async (target: ChannelId) => {
+    async (target: ChannelId, force = false) => {
+      if (force && !window.confirm(
+        `The previous ${target} attempt's outcome is unknown — it may already be live.\n\n` +
+          `Check ${target} first. Retrying anyway can post a duplicate.\n\nRetry ${target} anyway?`
+      )) {
+        return;
+      }
       setRetrying(target);
       setPublishState({ loading: false });
       try {
         const response = await fetch("/api/publish", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...authHeaders },
-          body: JSON.stringify({ draftId: draft.id, channels: [target] })
+          body: JSON.stringify({ draftId: draft.id, channels: [target], ...(force ? { force: true } : {}) })
         });
         const body = (await response.json()) as { dryRun?: boolean; results?: PublishResult[]; error?: string };
         if (!response.ok && !body.results) throw new Error(body.error ?? `HTTP ${response.status}`);
@@ -230,6 +236,18 @@ function DraftCard({
                     </button>
                   </>
                 ) : null}
+                {post.status === "unknown" || post.status === "pending" ? (
+                  <>
+                    {" — may already be live; check the platform before retrying "}
+                    <button
+                      className="btn"
+                      onClick={() => retryChannel(post.channel, true)}
+                      disabled={retrying !== null}
+                    >
+                      {retrying === post.channel ? "RETRYING…" : "RETRY ANYWAY"}
+                    </button>
+                  </>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -299,8 +317,22 @@ export function ReviewClient() {
     setError(null);
     try {
       const response = await fetch("/api/cron/generate", { headers: authHeaders });
-      const body = (await response.json()) as { error?: string };
-      if (!response.ok && response.status !== 207) throw new Error(body.error ?? `HTTP ${response.status}`);
+      const body = (await response.json()) as {
+        error?: string;
+        message?: string;
+        results?: { project: string; ok: boolean; skipped?: string; error?: string; drafted?: string[] }[];
+      };
+      if (!response.ok && response.status !== 207) {
+        throw new Error(body.error ?? body.message ?? `HTTP ${response.status}`);
+      }
+      // A run can succeed while generating nothing (feed unconfigured,
+      // placeholder profile, every project skipped). Say so instead of leaving
+      // an unexplained empty queue.
+      const notes = (body.results ?? [])
+        .filter((result) => result.skipped || !result.ok)
+        .map((result) => `${result.project}: ${result.skipped ?? result.error ?? "failed"}`);
+      const drafted = (body.results ?? []).reduce((total, result) => total + (result.drafted?.length ?? 0), 0);
+      setError(drafted === 0 && notes.length > 0 ? `No drafts generated — ${notes.join("; ")}` : null);
       await loadDrafts();
     } catch (generateError) {
       setError(generateError instanceof Error ? generateError.message : "Generate failed");

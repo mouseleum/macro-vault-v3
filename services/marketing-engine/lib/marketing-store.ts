@@ -21,10 +21,20 @@ export type DraftFilters = {
 
 export type ClaimedDraft = {
   draft: MarketingDraft;
-  // Status the draft had before the claim, so failed/dry-run publishes can
-  // restore it instead of escalating pending drafts to approved.
+  // State the draft had before the claim, so failed/dry-run publishes can
+  // restore it instead of escalating pending drafts to approved. reviewed_at is
+  // restored too: the claim stamps it, and leaving it set would mark a
+  // never-reviewed draft as human-approved.
   priorStatus: "pending" | "approved";
+  priorReviewedAt: string | null;
 };
+
+// Why a claim was refused. "unresolved_outcome" is the important one: a prior
+// attempt may or may not have reached the platform, so retrying needs an
+// explicit human decision (force) rather than a plain retry.
+export type ChannelClaim =
+  | { ok: true; post: MarketingPost }
+  | { ok: false; reason: "already_posted" | "unresolved_outcome" | "in_flight" };
 
 export type ChannelPostOutcome = {
   status: Exclude<MarketingPostStatus, "pending">;
@@ -47,10 +57,15 @@ export interface MarketingStore {
   // the caller must not post to any channel without a successful claim.
   claimDraftForPublish(id: string): Promise<ClaimedDraft | null>;
   // Channel-level idempotency: inserts an in-flight "pending" row for
-  // draft+channel, guarded by a partial unique index over pending/posted rows.
-  // Returns null when the channel is already posted or another publish is in
-  // flight — the caller must not call the channel API without this claim.
-  claimChannelPost(draftId: string, channel: MarketingPost["channel"]): Promise<MarketingPost | null>;
+  // draft+channel, guarded by a partial unique index over pending/unknown rows
+  // plus an explicit already-posted check. The caller must not call the channel
+  // API unless this returns ok. `force` overrides an unresolved outcome and is
+  // only for a human who has verified the platform themselves.
+  claimChannelPost(
+    draftId: string,
+    channel: MarketingPost["channel"],
+    options?: { force?: boolean }
+  ): Promise<ChannelClaim>;
   // Resolves an in-flight claim to its terminal status.
   resolveChannelPost(postId: string, outcome: ChannelPostOutcome): Promise<MarketingPost>;
   listContentHashes(project: string): Promise<Set<string>>;
@@ -114,9 +129,17 @@ class SupabaseMarketingStore implements MarketingStore {
   }
 
   async claimDraftForPublish(id: string) {
-    // One conditional update per source status so the prior status is known
-    // exactly; each attempt is individually atomic.
-    for (const priorStatus of ["approved", "pending"] as const) {
+    // Read first so priorStatus/priorReviewedAt are known exactly, then claim
+    // with a conditional update on that status. Retried because the status can
+    // move between the read and the update: a single .in() update would be
+    // atomic but would not reveal which status it replaced, while testing each
+    // status in a fixed order could miss a draft that changed mid-sequence.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await this.getDraft(id);
+      if (!current) return null;
+      if (current.status !== "pending" && current.status !== "approved") return null;
+      const priorStatus = current.status;
+
       const { data, error } = await this.supabase
         .from("marketing_drafts")
         .update({ status: "published", reviewed_at: new Date().toISOString() })
@@ -124,47 +147,73 @@ class SupabaseMarketingStore implements MarketingStore {
         .eq("status", priorStatus)
         .select("*");
       if (error) throw error;
-      if (data?.[0]) return { draft: data[0] as MarketingDraft, priorStatus };
+      if (data?.[0]) {
+        return { draft: data[0] as MarketingDraft, priorStatus, priorReviewedAt: current.reviewed_at };
+      }
     }
     return null;
   }
 
-  async claimChannelPost(draftId: string, channel: MarketingPost["channel"]) {
-    const insertClaim = async () => {
-      const { data, error } = await this.supabase
-        .from("marketing_posts")
-        .insert({ draft_id: draftId, channel, status: "pending", external_id: null, url: null, error: null })
-        .select("*")
-        .single();
-      if (error) {
-        if (isUniqueViolation(error)) return null;
-        throw error;
-      }
-      return data as MarketingPost;
-    };
-
-    const claimed = await insertClaim();
-    if (claimed) return claimed;
-
-    // Blocked: either already posted, a live publish is in flight, or a
-    // crashed run left a stale pending row we can supersede.
-    const { data: blocker, error: blockerError } = await this.supabase
+  async claimChannelPost(
+    draftId: string,
+    channel: MarketingPost["channel"],
+    options: { force?: boolean } = {}
+  ): Promise<ChannelClaim> {
+    const { data: existing, error: existingError } = await this.supabase
       .from("marketing_posts")
       .select("*")
       .eq("draft_id", draftId)
       .eq("channel", channel)
-      .in("status", ["pending", "posted"])
-      .maybeSingle();
-    if (blockerError) throw blockerError;
-    if (!blocker || !isStalePending(blocker as MarketingPost)) return null;
+      .in("status", ["posted", "pending", "unknown"]);
+    if (existingError) throw existingError;
+    const rows = (existing ?? []) as MarketingPost[];
 
-    const { error: staleError } = await this.supabase
+    // "posted" is not in the claim index (see marketing.sql), so it is checked
+    // here instead.
+    if (rows.some((row) => row.status === "posted") && !options.force) {
+      return { ok: false, reason: "already_posted" };
+    }
+    if (rows.some((row) => row.status === "pending" && !isStalePending(row))) {
+      return { ok: false, reason: "in_flight" };
+    }
+
+    // A crashed run's claim has an indeterminate outcome — the post may have
+    // landed before the function died — so it becomes "unknown", never
+    // "failed", and cannot be retried without an explicit force.
+    const stale = rows.filter((row) => isStalePending(row));
+    for (const row of stale) {
+      const { error } = await this.supabase
+        .from("marketing_posts")
+        .update({ status: "unknown", error: "publish did not finish; outcome unknown" })
+        .eq("id", row.id)
+        .eq("status", "pending");
+      if (error) throw error;
+    }
+
+    const unresolved = stale.length > 0 || rows.some((row) => row.status === "unknown");
+    if (unresolved && !options.force) return { ok: false, reason: "unresolved_outcome" };
+
+    if (options.force) {
+      const { error } = await this.supabase
+        .from("marketing_posts")
+        .update({ status: "failed", error: "superseded by forced retry" })
+        .eq("draft_id", draftId)
+        .eq("channel", channel)
+        .in("status", ["pending", "unknown"]);
+      if (error) throw error;
+    }
+
+    const { data, error } = await this.supabase
       .from("marketing_posts")
-      .update({ status: "failed", error: "stale in-flight claim superseded" })
-      .eq("id", (blocker as MarketingPost).id)
-      .eq("status", "pending");
-    if (staleError) throw staleError;
-    return insertClaim();
+      .insert({ draft_id: draftId, channel, status: "pending", external_id: null, url: null, error: null })
+      .select("*")
+      .single();
+    if (error) {
+      // Lost the race to a concurrent claim; the index kept one winner.
+      if (isUniqueViolation(error)) return { ok: false, reason: "in_flight" };
+      throw error;
+    }
+    return { ok: true, post: data as MarketingPost };
   }
 
   async resolveChannelPost(postId: string, outcome: ChannelPostOutcome) {
@@ -268,21 +317,51 @@ class MemoryMarketingStore implements MarketingStore {
     const existing = memoryState().drafts.find((draft) => draft.id === id);
     if (!existing || (existing.status !== "pending" && existing.status !== "approved")) return null;
     const priorStatus = existing.status;
+    const priorReviewedAt = existing.reviewed_at;
     existing.status = "published";
     existing.reviewed_at = new Date().toISOString();
-    return { draft: existing, priorStatus };
+    return { draft: existing, priorStatus, priorReviewedAt };
   }
 
-  async claimChannelPost(draftId: string, channel: MarketingPost["channel"]) {
+  // Mirrors the Supabase precedence exactly so dev behaviour matches prod.
+  async claimChannelPost(
+    draftId: string,
+    channel: MarketingPost["channel"],
+    options: { force?: boolean } = {}
+  ): Promise<ChannelClaim> {
     const state = memoryState();
-    const blocker = state.posts.find(
-      (post) => post.draft_id === draftId && post.channel === channel && (post.status === "pending" || post.status === "posted")
+    const rows = state.posts.filter(
+      (post) =>
+        post.draft_id === draftId &&
+        post.channel === channel &&
+        (post.status === "posted" || post.status === "pending" || post.status === "unknown")
     );
-    if (blocker) {
-      if (!isStalePending(blocker)) return null;
-      blocker.status = "failed";
-      blocker.error = "stale in-flight claim superseded";
+
+    if (rows.some((row) => row.status === "posted") && !options.force) {
+      return { ok: false, reason: "already_posted" };
     }
+    if (rows.some((row) => row.status === "pending" && !isStalePending(row))) {
+      return { ok: false, reason: "in_flight" };
+    }
+
+    const stale = rows.filter((row) => isStalePending(row));
+    for (const row of stale) {
+      row.status = "unknown";
+      row.error = "publish did not finish; outcome unknown";
+    }
+
+    const unresolved = stale.length > 0 || rows.some((row) => row.status === "unknown");
+    if (unresolved && !options.force) return { ok: false, reason: "unresolved_outcome" };
+
+    if (options.force) {
+      for (const row of rows) {
+        if (row.status === "pending" || row.status === "unknown") {
+          row.status = "failed";
+          row.error = "superseded by forced retry";
+        }
+      }
+    }
+
     const claim: MarketingPost = {
       id: crypto.randomUUID(),
       draft_id: draftId,
@@ -294,7 +373,7 @@ class MemoryMarketingStore implements MarketingStore {
       posted_at: new Date().toISOString()
     };
     state.posts.unshift(claim);
-    return claim;
+    return { ok: true, post: claim };
   }
 
   async resolveChannelPost(postId: string, outcome: ChannelPostOutcome) {
@@ -330,10 +409,12 @@ export function createMarketingStore(): MarketingStore {
 }
 
 export function isMissingMarketingTable(error: { code?: string; message?: string }) {
-  return (
-    error.code === "42P01" ||
-    error.code === "PGRST205" ||
-    Boolean(error.message?.includes("marketing_drafts")) ||
-    Boolean(error.message?.includes("marketing_posts"))
-  );
+  // Only genuine "relation does not exist" conditions. Matching on the table
+  // name alone misreported RLS denials, check-constraint violations and
+  // statement timeouts as a missing-table setup problem, and downgraded those
+  // 500s to 400s — sending operators to re-run a migration that was fine.
+  if (error.code === "42P01" || error.code === "PGRST205") return true;
+  const message = error.message ?? "";
+  if (!/marketing_drafts|marketing_posts/.test(message)) return false;
+  return /does not exist|could not find the table/i.test(message);
 }

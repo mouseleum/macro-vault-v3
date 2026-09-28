@@ -39,13 +39,34 @@ export type SelectedHighlight = {
   score: number;
 };
 
-// Starter feed files ship with EDIT-ME markers; never let unedited placeholder
-// content become a draft that a routine approval click could publish.
-const placeholderPattern = /EDIT[-\s]?ME/i;
+// Starter feed files and profiles ship with EDIT-ME markers; never let unedited
+// placeholder content become a draft that a routine approval click could
+// publish. Tolerates EDITME / EDIT_ME / repeated separators.
+const placeholderPattern = /EDIT[-_\s]*ME/i;
 
 export function isPlaceholderHighlight(highlight: MarketingHighlight) {
-  const linkText = [highlight.link ?? "", ...(highlight.media?.links ?? []).map((item) => `${item.label} ${item.url}`)].join(" ");
-  return placeholderPattern.test(`${highlight.headline} ${highlight.narrative} ${linkText}`);
+  const parts = [
+    highlight.headline,
+    highlight.narrative,
+    highlight.link ?? "",
+    highlight.media?.coverImageUrl ?? "",
+    ...(highlight.media?.links ?? []).map((item) => `${item.label} ${item.url}`)
+  ];
+  return placeholderPattern.test(parts.join(" "));
+}
+
+// The brand block is rendered onto every card and woven into every post, so an
+// unedited profile is as unpublishable as unedited feed content — flipping
+// `enabled` with a real feed but a placeholder handle would post cards branded
+// "@EDIT-ME". Checked per project rather than per highlight.
+export function placeholderProfileField(profile: ProjectProfile) {
+  const fields: [string, string][] = [
+    ["name", profile.name],
+    ["brand.logoText", profile.brand.logoText],
+    ["brand.handle", profile.brand.handle],
+    ["brand.tagline", profile.brand.tagline]
+  ];
+  return fields.find(([, value]) => placeholderPattern.test(value))?.[0] ?? null;
 }
 
 // Ask Gemini to order candidates by shareability when there are more than the

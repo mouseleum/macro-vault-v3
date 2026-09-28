@@ -36,26 +36,36 @@ create table if not exists public.marketing_posts (
   external_id text,
   url text,
   status text not null default 'posted'
-    check (status in ('pending', 'posted', 'failed', 'skipped', 'dry_run')),
+    check (status in ('pending', 'posted', 'unknown', 'failed', 'skipped', 'dry_run')),
   error text,
   posted_at timestamptz not null default now()
 );
 
 create index if not exists marketing_posts_draft_idx on public.marketing_posts (draft_id, posted_at desc);
 
--- Channel-level idempotency: at most one in-flight ('pending') or successful
--- ('posted') row per draft+channel. A publish inserts a pending claim before
--- calling the channel API, so concurrent publishes/retries cannot double-post;
--- failed/skipped/dry_run rows don't occupy the slot, keeping channels retryable.
-create unique index if not exists marketing_posts_channel_claim_idx
-  on public.marketing_posts (draft_id, channel)
-  where status in ('pending', 'posted');
-
--- Safe to re-run on deployments created before these existed.
+-- Safe to re-run on deployments created before these existed. The CHECK is
+-- widened BEFORE the claim index below, so a failure there can never roll back
+-- the widening and leave publishes rejecting their own 'pending' claim rows.
 alter table public.marketing_drafts add column if not exists media jsonb;
 alter table public.marketing_posts drop constraint if exists marketing_posts_status_check;
 alter table public.marketing_posts add constraint marketing_posts_status_check
-  check (status in ('pending', 'posted', 'failed', 'skipped', 'dry_run'));
+  check (status in ('pending', 'posted', 'unknown', 'failed', 'skipped', 'dry_run'));
+
+-- Channel-level idempotency. The slot covers only the two statuses this code
+-- writes while an attempt is unresolved: 'pending' (in flight) and 'unknown'
+-- (indeterminate outcome, needs a human decision). A publish inserts a pending
+-- claim before calling the channel API, so concurrent publishes cannot both
+-- reach the platform. 'posted' is deliberately NOT in the predicate: a legacy
+-- database can legitimately hold two posted rows for one draft+channel (the
+-- old unguarded insert path allowed it), and including it would abort this
+-- migration on exactly those deployments. Already-posted is enforced by an
+-- explicit check in claimChannelPost instead.
+-- Dropped first because CREATE INDEX IF NOT EXISTS silently keeps an existing
+-- index's old predicate.
+drop index if exists public.marketing_posts_channel_claim_idx;
+create unique index marketing_posts_channel_claim_idx
+  on public.marketing_posts (draft_id, channel)
+  where status in ('pending', 'unknown');
 
 -- The engine talks to Supabase with the service-role key only; keep RLS on so
 -- anon/authenticated roles have no access.

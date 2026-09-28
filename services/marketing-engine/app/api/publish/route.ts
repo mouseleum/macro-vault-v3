@@ -13,7 +13,10 @@ export const maxDuration = 120;
 
 const publishSchema = z.object({
   draftId: z.string().min(1),
-  channels: z.array(z.enum(["zapier", "bluesky", "x", "linkedin"])).min(1).optional()
+  channels: z.array(z.enum(["zapier", "bluesky", "x", "linkedin"])).min(1).optional(),
+  // Overrides a channel whose previous outcome is unknown. Only a human who has
+  // checked the platform should set this: it can produce a duplicate post.
+  force: z.boolean().optional()
 });
 
 type ChannelRun = {
@@ -21,20 +24,26 @@ type ChannelRun = {
   post: MarketingPost | null;
 };
 
-// Claims the channel slot, runs the adapter, and resolves the claim. The
-// claim insert is what makes concurrent publishes/retries safe: only one
-// caller can hold the pending/posted slot for a draft+channel at a time.
+const claimRefusal: Record<"already_posted" | "unresolved_outcome" | "in_flight", string> = {
+  already_posted: "already posted to this channel",
+  unresolved_outcome: "a previous attempt's outcome is unknown — verify on the platform, then retry with force",
+  in_flight: "another publish is in flight for this channel"
+};
+
+// Claims the channel slot, runs the adapter, and resolves the claim. The claim
+// insert is what makes concurrent publishes/retries safe: only one caller can
+// hold the slot for a draft+channel at a time.
 async function publishChannel(
   store: MarketingStore,
   draft: MarketingDraft,
   channel: ChannelId,
   profile: NonNullable<ReturnType<typeof getProject>>,
-  context: { baseUrl: string; dryRun: boolean }
+  context: { baseUrl: string; dryRun: boolean; force: boolean }
 ): Promise<ChannelRun> {
-  const claim = await store.claimChannelPost(draft.id, channel);
-  if (!claim) {
+  const claim = await store.claimChannelPost(draft.id, channel, { force: context.force });
+  if (!claim.ok) {
     return {
-      result: { channel, status: "skipped", error: "already posted or another publish is in flight" },
+      result: { channel, status: "skipped", error: claimRefusal[claim.reason] },
       post: null
     };
   }
@@ -43,21 +52,38 @@ async function publishChannel(
   try {
     result = await channelAdapters[channel](draft, profile, context);
   } catch (error) {
-    result = { channel, status: "failed", error: error instanceof Error ? error.message : "Unexpected publish error" };
+    // A throw means the request died mid-flight: the platform may already have
+    // accepted the post. Adapters return status "failed" when they got a real
+    // error response (definite non-delivery, safe to retry); anything that
+    // throws is indeterminate and must not be retried automatically. Some
+    // throws are in fact pre-send, but erring toward "unknown" only costs an
+    // extra confirmation, while erring toward "failed" costs a duplicate post.
+    result = {
+      channel,
+      status: "unknown",
+      error: `outcome unknown: ${error instanceof Error ? error.message : "unexpected publish error"}`
+    };
   }
 
   let post: MarketingPost | null = null;
   try {
-    post = await store.resolveChannelPost(claim.id, {
-      status: result.status === "pending" ? "failed" : result.status,
+    post = await store.resolveChannelPost(claim.post.id, {
+      status: result.status === "pending" ? "unknown" : result.status,
       external_id: result.externalId ?? null,
       url: result.url ?? null,
       error: result.error ?? null
     });
   } catch (error) {
-    // The outcome is still returned; the unresolved claim goes stale and
-    // becomes supersedable after the stale window, so nothing is stranded.
-    console.error(`[publish] failed to resolve channel claim ${claim.id}`, error);
+    // The post itself may have succeeded — log everything needed to reconcile
+    // by hand, because the row cannot record it. The claim stays "pending" and
+    // is later demoted to "unknown" (never "failed"), so no automatic retry can
+    // duplicate it.
+    console.error(
+      `[publish] channel ${channel} finished as ${result.status} but the claim ${claim.post.id} could not be resolved` +
+        `${result.externalId ? ` (external_id=${result.externalId})` : ""}` +
+        `${result.url ? ` (url=${result.url})` : ""}`,
+      error
+    );
   }
 
   return { result, post };
@@ -67,9 +93,10 @@ export async function POST(request: NextRequest) {
   const authError = assertMarketingAuth(request);
   if (authError) return authError;
 
-  const store = createMarketingStore();
-
   try {
+    // Inside the try so a missing env var surfaces as a readable JSON error
+    // instead of an opaque framework 500 the UI cannot even parse.
+    const store = createMarketingStore();
     const input = publishSchema.parse(await request.json());
 
     // Atomically claim the draft (pending/approved → published) BEFORE any
@@ -92,12 +119,16 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // From here on, any early exit or unexpected error must release the
-    // draft claim, or the draft is stranded as "published" with no posts.
+    // From here on, any early exit or unexpected error must release the draft
+    // claim, or the draft is stranded as "published" with no posts. Both the
+    // status and the claim's reviewed_at stamp are restored.
     const revert = async () => {
       if (!claimed) return draft;
       try {
-        return await store.updateDraft(draft.id, { status: claimed.priorStatus });
+        return await store.updateDraft(draft.id, {
+          status: claimed.priorStatus,
+          reviewed_at: claimed.priorReviewedAt
+        });
       } catch (error) {
         console.error(`[publish] failed to revert draft ${draft.id} to ${claimed.priorStatus}`, error);
         return draft;
@@ -119,18 +150,21 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "No requested channel is enabled for this project." }, { status: 400 });
       }
 
-      const context = { baseUrl: requestBaseUrl(request), dryRun: isDryRun() };
+      const context = { baseUrl: requestBaseUrl(request), dryRun: isDryRun(), force: input.force ?? false };
       const runs = await Promise.all(channels.map((channel) => publishChannel(store, draft, channel, profile, context)));
       const results = runs.map((run) => run.result);
       const posts = runs.flatMap((run) => (run.post ? [run.post] : []));
 
       const anyPosted = results.some((result) => result.status === "posted");
       const anyDryRun = results.some((result) => result.status === "dry_run");
+      const anyUnknown = results.some((result) => result.status === "unknown");
 
-      // A dry run or a fully failed publish must not consume the draft:
-      // restore the exact pre-claim status so pending drafts stay pending.
+      // A dry run or a fully failed publish must not consume the draft: restore
+      // the exact pre-claim state so pending drafts stay pending. An unknown
+      // outcome blocks the revert — the post may be live, and handing the draft
+      // back as publishable would invite a duplicate.
       let updated = draft;
-      if (claimed && !anyPosted) {
+      if (claimed && !anyPosted && !anyUnknown) {
         updated = await revert();
       }
 
@@ -139,6 +173,7 @@ export async function POST(request: NextRequest) {
         {
           ok,
           dryRun: context.dryRun,
+          needsAttention: anyUnknown,
           draft: updated,
           results,
           posts
@@ -151,7 +186,11 @@ export async function POST(request: NextRequest) {
     }
   } catch (error) {
     if (error && typeof error === "object" && isMissingMarketingTable(error as { code?: string; message?: string })) {
-      return NextResponse.json({ setupRequired: true, message: marketingSetupMessage }, { status: 400 });
+      // `error` as well as `message`: callers read body.error.
+      return NextResponse.json(
+        { setupRequired: true, error: marketingSetupMessage, message: marketingSetupMessage },
+        { status: 400 }
+      );
     }
     return jsonError(error);
   }
